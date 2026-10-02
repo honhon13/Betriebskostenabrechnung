@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+/*
+ * Farbrollen statt fester Farbwerte: Komponenten verwenden nur die Tokens aus
+ * @theme (bg-surface, text-muted, border-border …). Hell und Dunkel werden hier
+ * an einer Stelle umgeschaltet.
+ */
+:root {
+  color-scheme: light;
+
+  --background: #f7f7f5;
+  --surface: #ffffff;
+  --surface-muted: #f1f1ee;
+  --border: #e1e0d9;
+  --border-strong: #c3c2b7;
+
+  --foreground: #0b0b0b;
+  --muted: #52514e;
+  --subtle: #76746e;
+
+  --primary: #256abf;
+  --primary-hover: #1c5cab;
+  --primary-foreground: #ffffff;
+  --primary-soft: #e6f0fc;
+  --ring: #3987e5;
+
+  /* Status – immer zusammen mit Symbol und Text, nie als alleiniges Merkmal. */
+  --success: #006300;
+  --success-soft: #e3f4e3;
+  --warning: #8a5a00;
+  --warning-soft: #fdf0d0;
+  --danger: #b42f2f;
+  --danger-hover: #992626;
+  --danger-soft: #fbe6e6;
+
+  /* Diagramme: eine Reihe = ein Farbton, die Spur ist ein hellerer Schritt derselben Rampe. */
+  --chart-series: #2a78d6;
+  --chart-track: #cde2fb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --background: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-muted: #242423;
+    --border: #2c2c2a;
+    --border-strong: #45453f;
+
+    --foreground: #ffffff;
+    --muted: #c3c2b7;
+    --subtle: #98968f;
+
+    --primary: #3987e5;
+    --primary-hover: #5598e7;
+    --primary-foreground: #0b0b0b;
+    --primary-soft: #14283f;
+    --ring: #6da7ec;
+
+    --success: #4cc24c;
+    --success-soft: #12301a;
+    --warning: #fab219;
+    --warning-soft: #36290a;
+    --danger: #f08080;
+    --danger-hover: #f49a9a;
+    --danger-soft: #3a1717;
+
+    --chart-series: #3987e5;
+    --chart-track: #184f95;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --color-chart-series: var(--chart-series);
+  --color-chart-track: var(--chart-track);
+
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Native <dialog>: zentriert, mit abgedunkeltem Hintergrund; auf dem Handy als Sheet von unten. */
+dialog.modal {
+  margin: auto;
+  color: var(--foreground);
+}
+dialog.modal::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+@media (max-width: 639px) {
+  dialog.modal {
+    margin-bottom: 0;
+  }
+}
+
+/* Solange ein Dialog offen ist, scrollt die Seite dahinter nicht mit. */
+html:has(dialog[open]) {
+  overflow: hidden;
+}
+
+@media print {
+  body {
+    background: #ffffff;
+  }
+}

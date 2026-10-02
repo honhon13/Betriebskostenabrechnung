@@ -1,0 +1,156 @@
+export type PeriodStatus = "draft" | "released";
+export type AllocationSource = "unit_area" | "unit_persons" | "equal" | "manual";
+export type OcrStatus = "none" | "pending" | "done" | "failed";
+
+export interface UnitDto {
+  id: number;
+  number: number;
+  name: string;
+  areaSqm: number | null;
+  persons: number | null;
+  notes: string | null;
+}
+
+export interface PeriodDto {
+  id: number;
+  year: number;
+  startDate: string;
+  endDate: string;
+  status: PeriodStatus;
+  releasedAt: string | null;
+  notes: string | null;
+}
+
+export interface AllocationKeyDto {
+  id: number;
+  code: string;
+  name: string;
+  unitLabel: string;
+  source: AllocationSource;
+  description: string | null;
+  isSystem: boolean;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+/** Schlüsselwert einer TOP in einem Abrechnungsjahr. */
+export interface AllocationValueDto {
+  keyId: number;
+  unitId: number;
+  value: number;
+}
+
+export interface CategoryDto {
+  id: number;
+  name: string;
+  description: string | null;
+  defaultAllocationKeyId: number | null;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+export interface CostDto {
+  id: number;
+  periodId: number;
+  categoryId: number;
+  categoryName: string;
+  description: string;
+  amountCents: number;
+  costDate: string | null;
+  supplier: string | null;
+  invoiceNumber: string | null;
+  allocationKeyId: number;
+  allocationKeyName: string;
+  notes: string | null;
+  unitIds: number[];
+  receiptCount: number;
+}
+
+export interface PaymentDto {
+  id: number;
+  periodId: number;
+  year: number;
+  unitId: number;
+  unitName: string;
+  paymentDate: string;
+  amountCents: number;
+  purpose: string | null;
+  note: string | null;
+}
+
+/** Normalisierte OCR-Felder – unabhängig vom OCR-Anbieter. */
+export interface OcrFields {
+  documentDate: string | null;
+  invoiceNumber: string | null;
+  supplier: string | null;
+  amountCents: number | null;
+  currency: string | null;
+  /** Mittlere Erkennungssicherheit der gefundenen Felder (0–1). */
+  confidence: number | null;
+}
+
+export interface ReceiptDto {
+  id: number;
+  periodId: number;
+  costId: number | null;
+  costLabel: string | null;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  documentDate: string | null;
+  supplier: string | null;
+  invoiceNumber: string | null;
+  amountCents: number | null;
+  notes: string | null;
+  ocrStatus: OcrStatus;
+  ocr: OcrFields | null;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Abrechnungsergebnis
+// ---------------------------------------------------------------------------
+
+export interface StatementShare {
+  unitId: number;
+  cents: number;
+  /** Schlüsselwert der TOP (z. B. m²), der in die Verteilung eingeht. */
+  weight: number;
+}
+
+export interface StatementLine {
+  costId: number;
+  description: string;
+  categoryId: number;
+  categoryName: string;
+  costDate: string | null;
+  amountCents: number;
+  keyName: string;
+  keyUnitLabel: string;
+  /** Summe der Schlüsselwerte aller beteiligten TOPs. */
+  totalWeight: number;
+  shares: StatementShare[];
+  /** false, wenn die Summe der Schlüsselwerte 0 ist – der Betrag bleibt dann unverteilt. */
+  distributable: boolean;
+  receiptCount: number;
+}
+
+export interface UnitBalance {
+  unitId: number;
+  unitName: string;
+  costCents: number;
+  paymentCents: number;
+  /** Einzahlungen minus Kostenanteil: positiv = Guthaben, negativ = offener Betrag. */
+  balanceCents: number;
+}
+
+export interface Statement {
+  lines: StatementLine[];
+  balances: UnitBalance[];
+  /** Summe aller sichtbaren Kostenpositionen. */
+  totalCostCents: number;
+  /** Summe der sichtbaren Einzahlungen. */
+  totalPaymentCents: number;
+  /** Kosten, die mangels Schlüsselwerten keiner TOP zugeordnet werden konnten. */
+  undistributedCents: number;
+}

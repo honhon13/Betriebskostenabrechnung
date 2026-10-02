@@ -1,0 +1,176 @@
+import type {
+  AllocationSource,
+  Statement,
+  StatementLine,
+  UnitBalance,
+} from "@/types/billing";
+
+export interface Weight {
+  unitId: number;
+  /** Dezimalzahl mit höchstens drei Nachkommastellen (numeric(14,3) aus der Datenbank). */
+  weight: string | number;
+}
+
+export interface AllocationResult {
+  shares: { unitId: number; cents: number }[];
+  /** false, wenn alle Gewichte 0 sind – dann lässt sich nichts verteilen. */
+  distributable: boolean;
+}
+
+/** Dezimalwert → Tausendstel als BigInt, damit die Verteilung ohne Rundungsfehler rechnet. */
+export function toMilli(value: string | number): bigint {
+  const text = typeof value === "number" ? value.toFixed(3) : value.trim();
+  const match = /^(-?)(\d+)(?:\.(\d{1,3}))?\d*$/.exec(text);
+  if (!match) return 0n;
+  const milli = BigInt(match[2]) * 1000n + BigInt((match[3] ?? "").padEnd(3, "0") || "0");
+  return match[1] ? -milli : milli;
+}
+
+/**
+ * Verteilt einen Betrag im Verhältnis der Gewichte auf die TOPs.
+ * Restcents gehen nach dem Verfahren der größten Reste an die TOPs mit dem größten
+ * Rundungsverlust – die Summe der Anteile entspricht immer exakt dem Betrag.
+ */
+export function allocate(amountCents: number, weights: Weight[]): AllocationResult {
+  const entries = weights.map((w) => {
+    const milli = toMilli(w.weight);
+    return { unitId: w.unitId, weight: milli > 0n ? milli : 0n };
+  });
+  const total = entries.reduce((acc, e) => acc + e.weight, 0n);
+
+  if (total === 0n) {
+    return { shares: entries.map((e) => ({ unitId: e.unitId, cents: 0 })), distributable: false };
+  }
+
+  const sign = amountCents < 0 ? -1 : 1;
+  const amount = BigInt(Math.abs(amountCents));
+
+  const parts = entries.map((e) => ({
+    unitId: e.unitId,
+    weight: e.weight,
+    cents: (amount * e.weight) / total,
+    remainder: (amount * e.weight) % total,
+  }));
+
+  let leftover = amount - parts.reduce((acc, p) => acc + p.cents, 0n);
+  const byRemainder = [...parts].sort(
+    (a, b) =>
+      Number(b.remainder - a.remainder) || Number(b.weight - a.weight) || a.unitId - b.unitId,
+  );
+  for (const part of byRemainder) {
+    if (leftover === 0n) break;
+    part.cents += 1n;
+    leftover -= 1n;
+  }
+
+  return {
+    // `|| 0` verhindert -0 bei Gutschriften ohne Anteil.
+    shares: parts.map((p) => ({ unitId: p.unitId, cents: sign * Number(p.cents) || 0 })),
+    distributable: true,
+  };
+}
+
+export interface StatementInput {
+  units: { id: number; name: string }[];
+  costs: {
+    id: number;
+    description: string;
+    categoryId: number;
+    categoryName: string;
+    costDate: string | null;
+    amountCents: number;
+    keyId: number;
+    keyName: string;
+    keyUnitLabel: string;
+    keySource: AllocationSource;
+    /** TOP-Zuordnung der Kostenposition. */
+    unitIds: number[];
+    receiptCount: number;
+  }[];
+  /** Schlüsselwerte des Abrechnungsjahres. */
+  values: { keyId: number; unitId: number; value: string | number }[];
+  payments: { unitId: number; amountCents: number }[];
+}
+
+/** Berechnet die Abrechnung eines Jahres über alle TOPs. */
+export function buildStatement(input: StatementInput): Statement {
+  const valueByKeyAndUnit = new Map(
+    input.values.map((v) => [`${v.keyId}:${v.unitId}`, v.value] as const),
+  );
+  const knownUnits = new Set(input.units.map((u) => u.id));
+
+  const lines: StatementLine[] = input.costs.map((cost) => {
+    const weights: Weight[] = cost.unitIds
+      .filter((unitId) => knownUnits.has(unitId))
+      .map((unitId) => ({
+        unitId,
+        weight:
+          cost.keySource === "equal" ? 1 : (valueByKeyAndUnit.get(`${cost.keyId}:${unitId}`) ?? 0),
+      }));
+    const { shares, distributable } = allocate(cost.amountCents, weights);
+    const weightByUnit = new Map(weights.map((w) => [w.unitId, Number(toMilli(w.weight)) / 1000]));
+
+    return {
+      costId: cost.id,
+      description: cost.description,
+      categoryId: cost.categoryId,
+      categoryName: cost.categoryName,
+      costDate: cost.costDate,
+      amountCents: cost.amountCents,
+      keyName: cost.keyName,
+      keyUnitLabel: cost.keyUnitLabel,
+      totalWeight: [...weightByUnit.values()].reduce((a, b) => a + Math.max(b, 0), 0),
+      shares: shares.map((s) => ({ ...s, weight: Math.max(weightByUnit.get(s.unitId) ?? 0, 0) })),
+      distributable,
+      receiptCount: cost.receiptCount,
+    };
+  });
+
+  const balances: UnitBalance[] = input.units.map((unit) => {
+    const costCents = lines.reduce(
+      (acc, line) => acc + (line.shares.find((s) => s.unitId === unit.id)?.cents ?? 0),
+      0,
+    );
+    const paymentCents = input.payments
+      .filter((p) => p.unitId === unit.id)
+      .reduce((acc, p) => acc + p.amountCents, 0);
+    return {
+      unitId: unit.id,
+      unitName: unit.name,
+      costCents,
+      paymentCents,
+      balanceCents: paymentCents - costCents,
+    };
+  });
+
+  return {
+    lines,
+    balances,
+    totalCostCents: lines.reduce((acc, l) => acc + l.amountCents, 0),
+    totalPaymentCents: balances.reduce((acc, b) => acc + b.paymentCents, 0),
+    undistributedCents: lines
+      .filter((l) => !l.distributable)
+      .reduce((acc, l) => acc + l.amountCents, 0),
+  };
+}
+
+/**
+ * Schränkt eine Abrechnung auf eine TOP ein: nur Positionen, an denen sie beteiligt ist,
+ * und nur ihr eigener Anteil. Werte anderer TOPs verlassen so nie den Server.
+ */
+export function restrictStatementToUnit(statement: Statement, unitId: number | null): Statement {
+  const lines = statement.lines
+    .filter((line) => line.shares.some((s) => s.unitId === unitId))
+    .map((line) => ({ ...line, shares: line.shares.filter((s) => s.unitId === unitId) }));
+  const balances = statement.balances.filter((b) => b.unitId === unitId);
+
+  return {
+    lines,
+    balances,
+    totalCostCents: lines.reduce((acc, l) => acc + l.amountCents, 0),
+    totalPaymentCents: balances.reduce((acc, b) => acc + b.paymentCents, 0),
+    undistributedCents: lines
+      .filter((l) => !l.distributable)
+      .reduce((acc, l) => acc + l.amountCents, 0),
+  };
+}

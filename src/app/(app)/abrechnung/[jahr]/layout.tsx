@@ -1,0 +1,108 @@
+import { CircleCheck, Trash2, Undo2 } from "lucide-react";
+import { notFound } from "next/navigation";
+
+import { deletePeriodAction, setPeriodStatusAction } from "@/app/actions/billing";
+import { requireUser } from "@/auth/current-user";
+import { can, getDataScope } from "@/auth/rbac";
+import { NewPeriodDialog } from "@/components/billing/new-period-dialog";
+import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
+import { ConfirmAction } from "@/components/forms/confirm-action";
+import { Tabs, type TabItem } from "@/components/layout/tabs";
+import { YearSelect } from "@/components/layout/year-select";
+import { NoAccess } from "@/components/ui/no-access";
+import { PageHeader } from "@/components/ui/page";
+import { formatDate, formatDateTime } from "@/lib/format";
+import { listPeriods } from "@/services/periods.service";
+
+export default async function BillingYearLayout({
+  children,
+  params,
+}: LayoutProps<"/abrechnung/[jahr]">) {
+  const user = await requireUser();
+  if (!can(user, "period:read")) return <NoAccess />;
+
+  const { jahr } = await params;
+  const periods = await listPeriods(user);
+  // Nicht freigegebene Jahre sind für USER schlicht nicht vorhanden.
+  const period = periods.find((p) => String(p.year) === jahr);
+  if (!period) notFound();
+
+  const scope = getDataScope(user);
+  const base = `/abrechnung/${period.year}`;
+  const tabs: TabItem[] = [
+    { href: base, label: scope.allUnits ? "Übersicht" : "Meine Abrechnung" },
+    ...(scope.allUnits && can(user, "cost:read") ? [{ href: `${base}/kosten`, label: "Kosten" }] : []),
+    ...(scope.allUnits ? [{ href: `${base}/schluessel`, label: "Umlageschlüssel" }] : []),
+    ...(can(user, "receipt:read") ? [{ href: `${base}/belege`, label: "Belege" }] : []),
+  ];
+
+  const released = period.status === "released";
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title={`Abrechnung ${period.year}`}
+        description={
+          <span className="flex flex-wrap items-center gap-2">
+            {formatDate(period.startDate)} – {formatDate(period.endDate)}
+            <PeriodStatusBadge status={period.status} />
+            {released && period.releasedAt ? (
+              <span>seit {formatDateTime(period.releasedAt)}</span>
+            ) : null}
+          </span>
+        }
+      >
+        <YearSelect
+          years={periods.map((p) => p.year)}
+          value={period.year}
+          hrefPattern="/abrechnung/{year}"
+        />
+        {can(user, "period:release") ? (
+          <ConfirmAction
+            trigger={
+              released ? (
+                <>
+                  <Undo2 aria-hidden />
+                  Freigabe zurücknehmen
+                </>
+              ) : (
+                <>
+                  <CircleCheck aria-hidden />
+                  Freigeben
+                </>
+              )
+            }
+            triggerVariant={released ? "secondary" : "primary"}
+            triggerSize="md"
+            title={released ? "Freigabe zurücknehmen?" : `Abrechnung ${period.year} freigeben?`}
+            description={
+              released
+                ? "Die Abrechnung ist dann für TOP 1 und TOP 3 nicht mehr sichtbar und kann wieder bearbeitet werden."
+                : "Nach der Freigabe sehen die TOPs ihren Anteil, ihre Einzahlungen und die zugehörigen Belege. Kosten und Umlageschlüssel sind danach gesperrt."
+            }
+            confirmLabel={released ? "Zurücknehmen" : "Freigeben"}
+            action={setPeriodStatusAction.bind(null, period.id, released ? "draft" : "released")}
+          />
+        ) : null}
+        {can(user, "period:write") ? (
+          <NewPeriodDialog suggestedYear={Math.max(...periods.map((p) => p.year)) + 1} />
+        ) : null}
+        {can(user, "period:delete") ? (
+          <ConfirmAction
+            trigger={<Trash2 aria-hidden />}
+            triggerLabel={`Abrechnungsjahr ${period.year} löschen`}
+            title={`Abrechnungsjahr ${period.year} löschen?`}
+            description="Das Jahr kann nur gelöscht werden, wenn es keine Kosten, Einzahlungen und Belege mehr enthält."
+            confirmLabel="Löschen"
+            destructive
+            action={deletePeriodAction.bind(null, period.id)}
+          />
+        ) : null}
+      </PageHeader>
+
+      <Tabs items={tabs} label="Bereiche der Abrechnung" />
+
+      {children}
+    </div>
+  );
+}
