@@ -136,10 +136,40 @@ Die Dateien zählen zum Speicherplatz der Datenbank. Der kostenlose Neon-Plan er
 1 GB je Branch – bei 4 MB je Datei also mindestens etwa 250 Dokumente, bei typischen
 PDF-Rechnungen deutlich mehr.
 
-OCR ist vorbereitet und wird aktiv, sobald `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` und
-`AZURE_DOCUMENT_INTELLIGENCE_KEY` gesetzt sind. Dann erscheint bei jedem Dokument „per OCR
-auslesen": Datum, Rechnungsnummer, Lieferant und Betrag werden mit dem Modell
-`prebuilt-invoice` erkannt und füllen leere Rechnungsdaten-Felder.
+### OCR mit Azure Document Intelligence
+
+Sobald `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` und `AZURE_DOCUMENT_INTELLIGENCE_KEY` gesetzt
+sind, wird jedes Dokument beim Hochladen automatisch ausgelesen (Modell `prebuilt-invoice`,
+REST-API `2024-11-30`). Die Zugangsdaten kommen ausschließlich aus Umgebungsvariablen.
+
+1. Datei, Typ und Abrechnungsjahr wählen und „Hochladen und auslesen" klicken. Das Häkchen
+   „Automatisch per OCR auslesen" ist vorbelegt und lässt sich je Upload abwählen.
+2. Das Original wird unverändert gespeichert, danach läuft die OCR.
+3. Der Dialog zeigt die erkannten Werte direkt in den Formularfeldern: Rechnungssteller,
+   Rechnungsnummer, Rechnungsdatum, Leistungszeitraum, Betrag netto, MwSt., Betrag brutto
+   und Beschreibung (aus den Rechnungspositionen). Nicht erkannte Felder bleiben leer.
+4. Werte prüfen, korrigieren oder ergänzen und speichern.
+
+Was man selbst eingetragen hat, überschreibt die OCR nie – sie füllt nur leere Felder. Das
+vollständige OCR-Ergebnis (erkannte Werte, Rohfelder mit Erkennungssicherheit, Anbieter und
+Modell) steht in `documents.ocr_result`; die übernommenen Werte in den jeweiligen Spalten.
+
+| OCR-Status | Bedeutung |
+| --- | --- |
+| Offen | Noch nicht ausgelesen (OCR abgewählt, nicht eingerichtet oder abgebrochen) |
+| Verarbeitet | Auswertung abgeschlossen – auch wenn nichts erkannt wurde |
+| Fehler | Auswertung gescheitert; der Grund steht am Dokument (`ocr_error`) |
+
+Ein OCR-Fehler lässt den Upload nicht scheitern: Das Dokument ist gespeichert, die Felder
+lassen sich von Hand ausfüllen, und über die Schaltfläche „per OCR auslesen" kann man es
+später erneut versuchen. Gemeldet werden u. a. nicht lesbare oder passwortgeschützte Dateien,
+Formate, die Azure nicht annimmt (WebP), ungültige Zugangsdaten, ein erschöpftes Kontingent
+und Zeitüberschreitungen. Der kostenlose Azure-Tarif (F0) liest nur die ersten zwei Seiten
+und Dateien bis 4 MB.
+
+Automatisch ausgelesen wird nur beim Upload in der Dokumentenverwaltung. Belege, die über das
+Kosten- oder Einzahlungsformular angehängt werden, bleiben „Offen" und lassen sich bei Bedarf
+per Schaltfläche auslesen.
 
 ## Deployment auf Vercel
 
@@ -147,7 +177,8 @@ auslesen": Datum, Rechnungsnummer, Lieferant und Betrag werden mit dem Modell
    `vercel.json` – passend zur Neon-Region Frankfurt).
 2. Unter *Storage* die Neon-Datenbank mit dem Projekt verbinden. Die Integration setzt
    `DATABASE_URL` und `DATABASE_URL_UNPOOLED` automatisch.
-3. Optional die Azure-Variablen für OCR setzen.
+3. Für OCR `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` und `AZURE_DOCUMENT_INTELLIGENCE_KEY` unter
+   *Settings → Environment Variables* setzen (Production). Ohne sie bleibt OCR ausgeblendet.
 4. Deployen. Vercel ruft `npm run vercel-build` auf: bei einem **Production**-Deployment
    laufen zuerst die ausstehenden Migrationen, dann der Build. Schlägt eine Migration fehl,
    bricht das Deployment ab und die bisherige Version bleibt online. Preview-Deployments
@@ -161,7 +192,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Beträge, RBAC, Passwörter, Service-Rechte |
+| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |
@@ -171,6 +202,9 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 
 Migration und Seed verwenden `DATABASE_URL_UNPOOLED`. Eine in der Shell gesetzte Variable
 hat Vorrang vor `.env.local` – so lässt sich das Ziel pro Aufruf wählen.
+
+Die End-to-End-Tests starten einen lokalen Nachbau der Azure-API (`e2e/mock-azure.mjs`) –
+sie brauchen keine Azure-Zugangsdaten und schicken keine Dokumente an Azure.
 
 Die End-to-End-Tests schreiben in die Datenbank und setzen das laufende Abrechnungsjahr auf
 „Entwurf" zurück. Sie gehören auf einen Entwicklungs-Branch, nie auf die Produktionsdatenbank.

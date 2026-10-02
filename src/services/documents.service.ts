@@ -33,6 +33,7 @@ import type {
   DocumentRef,
   DocumentType,
   OcrFields,
+  OcrOutcome,
 } from "@/types/billing";
 
 import { getOcrService, OcrError, type OcrResult } from "./ocr";
@@ -96,10 +97,12 @@ export interface DocumentFilter {
   /** Nur Dokumente, die diese TOP betreffen (nur mit Blick auf alle TOPs wirksam). */
   unitId?: number;
   type?: DocumentType;
-  /** Volltext über Dateiname, Beschreibung, Lieferant, Rechnungsnummer, Kostenposition. */
+  /** Volltext über Dateiname, Beschreibung, Rechnungssteller, Rechnungsnummer, Kostenposition. */
   search?: string;
   sort?: DocumentSort;
   limit?: number;
+  /** Genau ein Dokument – für getDocument. */
+  documentId?: number;
 }
 
 /** Lädt die Verknüpfungen zu Dokumenten – für eingeschränkte Benutzer nur die eigenen. */
@@ -162,12 +165,28 @@ async function loadLinks(
   return result;
 }
 
+const EMPTY_OCR_FIELDS: OcrFields = {
+  supplier: null,
+  invoiceNumber: null,
+  documentDate: null,
+  servicePeriodStart: null,
+  servicePeriodEnd: null,
+  netAmountCents: null,
+  taxAmountCents: null,
+  amountCents: null,
+  taxRate: null,
+  description: null,
+  currency: null,
+  confidence: null,
+};
+
 function toDto(
   row: DocumentRow,
   year: number,
   unitName: string | null,
   links: { costs: DocumentLinkRef[]; payments: DocumentLinkRef[] },
 ): DocumentDto {
+  const stored = row.ocrResult as OcrResult | null;
   return {
     id: row.id,
     periodId: row.periodId,
@@ -182,9 +201,15 @@ function toDto(
     documentDate: row.documentDate,
     supplier: row.supplier,
     invoiceNumber: row.invoiceNumber,
+    servicePeriodStart: row.servicePeriodStart,
+    servicePeriodEnd: row.servicePeriodEnd,
+    netAmountCents: row.netAmountCents,
+    taxAmountCents: row.taxAmountCents,
     amountCents: row.amountCents,
     ocrStatus: row.ocrStatus,
-    ocr: (row.ocrResult as OcrResult | null)?.fields ?? null,
+    // Ältere Ergebnisse kennen die neueren Felder noch nicht – fehlende gelten als nicht erkannt.
+    ocr: stored ? { ...EMPTY_OCR_FIELDS, ...stored.fields } : null,
+    ocrError: row.ocrError,
     createdAt: row.createdAt.toISOString(),
     costs: links.costs,
     payments: links.payments,
@@ -239,6 +264,7 @@ export async function listDocuments(
       and(
         periodCondition(actor),
         scopeCondition(actor),
+        filter.documentId ? eq(documents.id, filter.documentId) : undefined,
         filter.periodId ? eq(documents.periodId, filter.periodId) : undefined,
         filter.type ? eq(documents.type, filter.type) : undefined,
         filter.unitId && scope.allUnits ? relevantToUnit(filter.unitId) : undefined,
@@ -255,6 +281,13 @@ export async function listDocuments(
   return rows.map(({ document, year, unitName }) =>
     toDto(document, year, unitName, links.get(document.id)!),
   );
+}
+
+/** Ein einzelnes Dokument mit Verknüpfungen – nach derselben Sichtbarkeitsprüfung wie die Liste. */
+export async function getDocument(actor: SessionUser, documentId: number): Promise<DocumentDto> {
+  const [document] = await listDocuments(actor, { documentId });
+  if (!document) throw new NotFoundError("Das Dokument wurde nicht gefunden.");
+  return document;
 }
 
 /**
@@ -409,6 +442,10 @@ function toColumns(meta: DocumentMetaInput) {
     documentDate: meta.documentDate,
     supplier: meta.supplier,
     invoiceNumber: meta.invoiceNumber,
+    servicePeriodStart: meta.servicePeriodStart,
+    servicePeriodEnd: meta.servicePeriodEnd,
+    netAmountCents: meta.netAmount,
+    taxAmountCents: meta.taxAmount,
     amountCents: meta.amount,
   };
 }
@@ -553,47 +590,95 @@ export function isOcrAvailable(): boolean {
   return getOcrService().isConfigured();
 }
 
+/** Formularfelder, die die OCR füllen kann: Spalte, Beschriftung und erkannter Wert. */
+function ocrCandidates(fields: OcrFields) {
+  return [
+    { column: "supplier", label: "Rechnungssteller", value: fields.supplier },
+    { column: "invoiceNumber", label: "Rechnungsnummer", value: fields.invoiceNumber },
+    { column: "documentDate", label: "Rechnungsdatum", value: fields.documentDate },
+    { column: "servicePeriodStart", label: "Leistungszeitraum von", value: fields.servicePeriodStart },
+    { column: "servicePeriodEnd", label: "Leistungszeitraum bis", value: fields.servicePeriodEnd },
+    { column: "netAmountCents", label: "Betrag netto", value: fields.netAmountCents },
+    { column: "taxAmountCents", label: "MwSt.", value: fields.taxAmountCents },
+    { column: "amountCents", label: "Betrag brutto", value: fields.amountCents },
+    { column: "description", label: "Beschreibung", value: fields.description },
+  ] as const;
+}
+
 /**
- * Liest Datum, Rechnungsnummer, Lieferant und Betrag per OCR aus. Bereits
- * ausgefüllte Metadaten bleiben unangetastet – OCR ergänzt nur leere Felder.
+ * Führt die OCR für ein Dokument aus und übernimmt erkannte Werte in leere Formularfelder.
+ * Bereits ausgefüllte Felder bleiben unangetastet, nicht Erkanntes bleibt leer.
+ *
+ * Fehler der Texterkennung (nicht lesbar, Format nicht unterstützt, Dienst nicht erreichbar)
+ * werden am Dokument gespeichert und als Ergebnis zurückgegeben statt geworfen – das Dokument
+ * selbst ist davon unberührt und kann von Hand ergänzt oder später erneut ausgelesen werden.
  */
-export async function runDocumentOcr(actor: SessionUser, documentId: number): Promise<OcrFields> {
+export async function processDocumentOcr(
+  actor: SessionUser,
+  documentId: number,
+): Promise<OcrOutcome> {
   authorizeGlobalWrite(actor, "document:ocr");
   const document = await getAccessibleDocument(actor, documentId);
 
   const ocr = getOcrService();
   if (!ocr.isConfigured()) throw new DomainError("OCR ist nicht eingerichtet.");
+
+  const db = getDb();
+  const fail = async (error: string): Promise<OcrOutcome> => {
+    await db
+      .update(documents)
+      .set({ ocrStatus: "failed", ocrError: error, ocrProcessedAt: new Date() })
+      .where(eq(documents.id, documentId));
+    return { status: "failed", fields: null, filled: [], error };
+  };
+
   if (!ocr.supports(document.mimeType)) {
-    throw new DomainError("Dieses Dateiformat kann nicht per OCR ausgelesen werden.");
+    const label = ALLOWED_FILE_TYPES[document.mimeType]?.label ?? document.mimeType;
+    return fail(`${label}-Dateien können nicht per OCR ausgelesen werden.`);
   }
 
   const bytes = await loadContent(documentId);
+  // „pending“ bleibt stehen, falls die Auswertung abbricht – das Dokument gilt dann weiter als offen.
+  await db
+    .update(documents)
+    .set({ ocrStatus: "pending", ocrError: null })
+    .where(eq(documents.id, documentId));
 
-  const db = getDb();
-  await db.update(documents).set({ ocrStatus: "pending" }).where(eq(documents.id, documentId));
-
+  let result: OcrResult;
   try {
-    const result = await ocr.analyzeInvoice({ bytes, mimeType: document.mimeType });
-    const { fields } = result;
-    await db
-      .update(documents)
-      .set({
-        ocrStatus: "done",
-        ocrResult: result,
-        ocrProcessedAt: new Date(),
-        documentDate: document.documentDate ?? fields.documentDate,
-        supplier: document.supplier ?? fields.supplier,
-        invoiceNumber: document.invoiceNumber ?? fields.invoiceNumber,
-        amountCents: document.amountCents ?? fields.amountCents,
-      })
-      .where(eq(documents.id, documentId));
-    return fields;
+    result = await ocr.analyzeInvoice({ bytes, mimeType: document.mimeType });
   } catch (error) {
-    await db
-      .update(documents)
-      .set({ ocrStatus: "failed", ocrProcessedAt: new Date() })
-      .where(eq(documents.id, documentId));
-    if (error instanceof OcrError) throw new DomainError(error.message);
-    throw error;
+    if (error instanceof OcrError) return fail(error.message);
+    console.error(`OCR für Dokument ${documentId} fehlgeschlagen:`, error);
+    return fail("Die OCR-Auswertung ist fehlgeschlagen. Bitte später erneut versuchen.");
   }
+
+  // Nur leere Felder füllen: was jemand eingetragen hat, überschreibt die OCR nie.
+  const fillable = ocrCandidates(result.fields).filter(
+    (candidate) => candidate.value !== null && document[candidate.column] === null,
+  );
+  await db
+    .update(documents)
+    .set({
+      ...Object.fromEntries(fillable.map((candidate) => [candidate.column, candidate.value])),
+      ocrStatus: "done",
+      ocrResult: result,
+      ocrError: null,
+      ocrProcessedAt: new Date(),
+    })
+    .where(eq(documents.id, documentId));
+
+  return {
+    status: "done",
+    fields: result.fields,
+    filled: fillable.map((candidate) => candidate.label),
+    error: null,
+  };
+}
+
+/** Wie processDocumentOcr, meldet eine fehlgeschlagene Auswertung aber als Fehler (für die Schaltfläche). */
+export async function runDocumentOcr(actor: SessionUser, documentId: number): Promise<OcrOutcome> {
+  const outcome = await processDocumentOcr(actor, documentId);
+  if (outcome.status === "failed") throw new DomainError(outcome.error ?? "OCR fehlgeschlagen.");
+  return outcome;
 }

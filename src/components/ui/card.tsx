@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 export function Card({ className, ...props }: ComponentProps<"section">) {
   return (
     <section
-      className={cn("rounded-xl border border-border bg-surface", className)}
+      // min-w-0: in einem Grid darf langer Inhalt (z. B. ein Dateiname) die Karte nicht aufweiten.
+      className={cn("min-w-0 rounded-xl border border-border bg-surface", className)}
       {...props}
     />
   );

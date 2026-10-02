@@ -75,6 +75,10 @@ async function attachInvoice(
       documentDate: input.costDate,
       supplier: input.supplier,
       invoiceNumber: input.invoiceNumber,
+      servicePeriodStart: null,
+      servicePeriodEnd: null,
+      netAmount: null,
+      taxAmount: null,
       amount: input.amount,
     });
   } catch (error) {

@@ -180,20 +180,34 @@ export const paymentSchema = z.object({
 
 export const documentTypeSchema = z.enum(["invoice", "payment_proof", "contract", "other"]);
 
-export const documentMetaSchema = z.object({
-  type: documentTypeSchema.default("invoice"),
-  description: optionalText(1000),
-  /** Optional: TOP, zu der das Dokument gehört. */
-  unitId: optionalId,
-  /** Verknüpfte Kostenpositionen (keine, eine oder mehrere). */
-  costIds: z.array(id).max(100).default([]),
-  /** Verknüpfte Einzahlung, z. B. bei einem Zahlungsnachweis. */
-  paymentId: optionalId,
-  documentDate: optionalIsoDate,
-  supplier: optionalText(200),
-  invoiceNumber: optionalText(100),
-  amount: optionalAmountCents,
-});
+export const documentMetaSchema = z
+  .object({
+    type: documentTypeSchema.default("invoice"),
+    description: optionalText(1000),
+    /** Optional: TOP, zu der das Dokument gehört. */
+    unitId: optionalId,
+    /** Verknüpfte Kostenpositionen (keine, eine oder mehrere). */
+    costIds: z.array(id).max(100).default([]),
+    /** Verknüpfte Einzahlung, z. B. bei einem Zahlungsnachweis. */
+    paymentId: optionalId,
+    /** Rechnungsdatum. */
+    documentDate: optionalIsoDate,
+    /** Rechnungssteller. */
+    supplier: optionalText(200),
+    invoiceNumber: optionalText(100),
+    servicePeriodStart: optionalIsoDate,
+    servicePeriodEnd: optionalIsoDate,
+    netAmount: optionalAmountCents,
+    /** MwSt.-Betrag. */
+    taxAmount: optionalAmountCents,
+    /** Bruttobetrag. */
+    amount: optionalAmountCents,
+  })
+  .refine(
+    (data) =>
+      !data.servicePeriodStart || !data.servicePeriodEnd || data.servicePeriodStart <= data.servicePeriodEnd,
+    { path: ["servicePeriodEnd"], message: "Das Ende des Leistungszeitraums liegt vor dem Beginn." },
+  );
 
 // ---------------------------------------------------------------------------
 // Stammdaten

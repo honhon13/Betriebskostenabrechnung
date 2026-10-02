@@ -93,15 +93,37 @@ export interface PaymentDto {
   createdAt: string;
 }
 
-/** Normalisierte OCR-Felder – unabhängig vom OCR-Anbieter. */
+/** Normalisierte OCR-Felder – unabhängig vom OCR-Anbieter. Nicht Erkanntes ist null. */
 export interface OcrFields {
-  documentDate: string | null;
-  invoiceNumber: string | null;
+  /** Rechnungssteller. */
   supplier: string | null;
+  invoiceNumber: string | null;
+  /** Rechnungsdatum. */
+  documentDate: string | null;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  netAmountCents: number | null;
+  /** MwSt.-Betrag. */
+  taxAmountCents: number | null;
+  /** Bruttobetrag. */
   amountCents: number | null;
+  /** MwSt.-Satz wie auf der Rechnung gedruckt, z. B. „20 %“. */
+  taxRate: string | null;
+  /** Aus den Rechnungspositionen abgeleitete Kurzbeschreibung. */
+  description: string | null;
   currency: string | null;
   /** Mittlere Erkennungssicherheit der gefundenen Felder (0–1). */
   confidence: number | null;
+}
+
+/** Ergebnis eines OCR-Laufs für die Oberfläche. */
+export interface OcrOutcome {
+  status: "done" | "failed";
+  /** Was die OCR erkannt hat – null, wenn sie fehlgeschlagen ist. */
+  fields: OcrFields | null;
+  /** Beschriftungen der Formularfelder, die mit erkannten Werten gefüllt wurden. */
+  filled: string[];
+  error: string | null;
 }
 
 /** Verknüpfung eines Dokuments, mit fertigem Anzeigetext. */
@@ -124,9 +146,17 @@ export interface DocumentDto {
   documentDate: string | null;
   supplier: string | null;
   invoiceNumber: string | null;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  netAmountCents: number | null;
+  taxAmountCents: number | null;
+  /** Bruttobetrag. */
   amountCents: number | null;
   ocrStatus: OcrStatus;
+  /** Von der OCR erkannte Werte – unabhängig davon, was inzwischen im Formular steht. */
   ocr: OcrFields | null;
+  /** Grund, falls der letzte OCR-Lauf fehlgeschlagen ist. */
+  ocrError: string | null;
   /** Upload-Datum. */
   createdAt: string;
   costs: DocumentLinkRef[];

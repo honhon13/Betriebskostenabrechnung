@@ -22,6 +22,7 @@ interface ActionFormProps {
   /** Wird nach erfolgreichem Speichern aufgerufen, z. B. um einen Dialog zu schließen. */
   onSuccess?: (state: ActionState) => void;
   onCancel?: () => void;
+  cancelLabel?: string;
   /** Erfolgsmeldung im Formular anzeigen (für Formulare, die offen bleiben). */
   showSuccess?: boolean;
   /** Felder nach Erfolg leeren (z. B. Passwortformular). */
@@ -41,6 +42,7 @@ export function ActionForm({
   children,
   onSuccess,
   onCancel,
+  cancelLabel = "Abbrechen",
   showSuccess = false,
   resetOnSuccess = false,
   submitVariant = "primary",
@@ -100,7 +102,7 @@ export function ActionForm({
       <div className={cn("flex flex-wrap justify-end gap-2 pt-4", footerClassName)}>
         {onCancel ? (
           <Button variant="secondary" onClick={onCancel} disabled={pending}>
-            Abbrechen
+            {cancelLabel}
           </Button>
         ) : null}
         <Button type="submit" variant={submitVariant} disabled={pending}>

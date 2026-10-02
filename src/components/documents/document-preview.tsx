@@ -59,7 +59,8 @@ export function DocumentPreviewButton({
           )}
         >
           <Icon className="size-3.5 shrink-0 text-subtle" aria-hidden />
-          <span className={variant === "chip" ? "max-w-40 truncate" : "min-w-0 break-words"}>
+          {/* Dateinamen haben oft keine Leerzeichen – sie dürfen an jeder Stelle umbrechen. */}
+          <span className={variant === "chip" ? "max-w-40 truncate" : "min-w-0 wrap-anywhere"}>
             {document.fileName}
           </span>
         </button>

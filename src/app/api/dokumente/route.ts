@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requireActor } from "@/auth/current-user";
+import { can } from "@/auth/rbac";
 import { apiErrorResponse } from "@/lib/api";
 import { DomainError } from "@/lib/errors";
 import { MAX_UPLOAD_BYTES } from "@/lib/files";
@@ -8,9 +9,22 @@ import { formToObject } from "@/lib/form-data";
 import { formatFileSize } from "@/lib/format";
 import { readUpload } from "@/lib/upload";
 import { documentMetaSchema, parseId } from "@/lib/validation";
-import { uploadDocument } from "@/services/documents.service";
+import {
+  getDocument,
+  isOcrAvailable,
+  processDocumentOcr,
+  uploadDocument,
+} from "@/services/documents.service";
+import type { OcrOutcome } from "@/types/billing";
 
-/** Dokument-Upload (multipart/form-data): Datei, Abrechnungsjahr, Typ und Verknüpfungen. */
+// Die OCR-Auswertung wartet auf Azure – dafür reicht das Standard-Zeitlimit nicht immer.
+export const maxDuration = 60;
+
+/**
+ * Dokument-Upload (multipart/form-data): Datei, Abrechnungsjahr, Typ und Verknüpfungen.
+ * Mit `ocr=on` wird das Dokument direkt nach dem Speichern per OCR ausgelesen; die Antwort
+ * enthält dann das Dokument mit den übernommenen Werten und das Ergebnis der Auswertung.
+ */
 export async function POST(request: Request): Promise<Response> {
   try {
     const actor = await requireActor();
@@ -28,8 +42,15 @@ export async function POST(request: Request): Promise<Response> {
     const meta = documentMetaSchema.parse(formToObject(formData, ["costIds"]));
     const id = await uploadDocument(actor, parseId(formData.get("periodId")), file, meta);
 
+    // Das Original ist ab hier gespeichert. Scheitert die OCR, bleibt der Upload erfolgreich –
+    // der Fehler steht am Dokument, und es lässt sich von Hand ergänzen oder erneut auslesen.
+    let ocr: OcrOutcome | null = null;
+    if (formData.get("ocr") === "on" && isOcrAvailable() && can(actor, "document:ocr")) {
+      ocr = await processDocumentOcr(actor, id);
+    }
+
     revalidatePath("/", "layout");
-    return Response.json({ id }, { status: 201 });
+    return Response.json({ id, document: await getDocument(actor, id), ocr }, { status: 201 });
   } catch (error) {
     return apiErrorResponse(error);
   }

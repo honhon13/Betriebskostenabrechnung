@@ -59,6 +59,10 @@ const documentMeta = {
   documentDate: null,
   supplier: null,
   invoiceNumber: null,
+  servicePeriodStart: null,
+  servicePeriodEnd: null,
+  netAmount: null,
+  taxAmount: null,
   amount: null,
 };
 const file = { name: "x.pdf", bytes: Buffer.from("%PDF-1.4") };
@@ -87,6 +91,7 @@ const forbiddenForUser: Record<string, () => Promise<unknown>> = {
   updateDocument: () => documents.updateDocument(user, 1, 1, documentMeta),
   deleteDocument: () => documents.deleteDocument(user, 1),
   runDocumentOcr: () => documents.runDocumentOcr(user, 1),
+  processDocumentOcr: () => documents.processDocumentOcr(user, 1),
   listLinkOptions: () => documents.listLinkOptions(user),
   // Stammdaten
   updateUnit: () => masterdata.updateUnit(user, 1, { name: "x", areaSqm: null, persons: null, notes: null }),

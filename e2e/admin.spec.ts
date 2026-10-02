@@ -257,7 +257,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByRole("checkbox", { name: new RegExp(COST) })).toBeChecked();
     await dialog.getByLabel("Dokumenttyp").selectOption({ label: "Sonstiges" });
-    await dialog.getByLabel("Lieferant").fill("E2E GmbH");
+    await dialog.getByLabel("Rechnungssteller").fill("E2E GmbH");
     await dialog.getByRole("button", { name: "Speichern" }).click();
     await expect(dialog).toBeHidden();
     await expect(row(page, FILE)).toContainText("Sonstiges");

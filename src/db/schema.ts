@@ -289,9 +289,18 @@ export const documents = pgTable(
     documentDate: date("document_date", { mode: "string" }),
     supplier: text("supplier"),
     invoiceNumber: text("invoice_number"),
+    /** Leistungszeitraum laut Rechnung. */
+    servicePeriodStart: date("service_period_start", { mode: "string" }),
+    servicePeriodEnd: date("service_period_end", { mode: "string" }),
+    netAmountCents: integer("net_amount_cents"),
+    taxAmountCents: integer("tax_amount_cents"),
+    /** Bruttobetrag. */
     amountCents: integer("amount_cents"),
+    // none/pending = offen, done = verarbeitet, failed = Fehler (Grund in ocr_error).
     ocrStatus: ocrStatus("ocr_status").notNull().default("none"),
+    /** Vollständiges OCR-Ergebnis: erkannte Werte, Anbieter, Modell und Rohfelder. */
     ocrResult: jsonb("ocr_result"),
+    ocrError: text("ocr_error"),
     ocrProcessedAt: timestamp("ocr_processed_at", { withTimezone: true }),
     uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
     /** Upload-Datum. */

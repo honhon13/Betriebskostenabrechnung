@@ -160,31 +160,64 @@ export function DocumentFields({
 
       <details className="group rounded-lg border border-border" open={Boolean(document)}>
         <summary className="flex h-10 cursor-pointer list-none items-center px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
-          Rechnungsdaten (Datum, Lieferant, Betrag)
+          Rechnungsdaten (Rechnungssteller, Datum, Beträge)
         </summary>
         <div className="space-y-4 border-t border-border p-3">
+          <Field label="Rechnungssteller" name="supplier" optional>
+            <Input name="supplier" defaultValue={document?.supplier ?? ""} maxLength={200} />
+          </Field>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Belegdatum" name="documentDate" optional>
-              <Input name="documentDate" type="date" defaultValue={document?.documentDate ?? ""} />
-            </Field>
-            <Field label="Betrag (€)" name="amount" optional>
-              <Input
-                name="amount"
-                inputMode="decimal"
-                placeholder="0,00"
-                defaultValue={centsToInput(document?.amountCents)}
-              />
-            </Field>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Lieferant" name="supplier" optional>
-              <Input name="supplier" defaultValue={document?.supplier ?? ""} maxLength={200} />
-            </Field>
             <Field label="Rechnungsnummer" name="invoiceNumber" optional>
               <Input
                 name="invoiceNumber"
                 defaultValue={document?.invoiceNumber ?? ""}
                 maxLength={100}
+              />
+            </Field>
+            <Field label="Rechnungsdatum" name="documentDate" optional>
+              <Input name="documentDate" type="date" defaultValue={document?.documentDate ?? ""} />
+            </Field>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Leistungszeitraum von" name="servicePeriodStart" optional>
+              <Input
+                name="servicePeriodStart"
+                type="date"
+                defaultValue={document?.servicePeriodStart ?? ""}
+              />
+            </Field>
+            <Field label="Leistungszeitraum bis" name="servicePeriodEnd" optional>
+              <Input
+                name="servicePeriodEnd"
+                type="date"
+                defaultValue={document?.servicePeriodEnd ?? ""}
+              />
+            </Field>
+          </div>
+          {/* Kurze Beschriftungen: drei Betragsfelder nebeneinander müssen auch im Dialog Platz haben. */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Netto (€)" name="netAmount">
+              <Input
+                name="netAmount"
+                inputMode="decimal"
+                placeholder="0,00"
+                defaultValue={centsToInput(document?.netAmountCents)}
+              />
+            </Field>
+            <Field label="MwSt. (€)" name="taxAmount">
+              <Input
+                name="taxAmount"
+                inputMode="decimal"
+                placeholder="0,00"
+                defaultValue={centsToInput(document?.taxAmountCents)}
+              />
+            </Field>
+            <Field label="Brutto (€)" name="amount">
+              <Input
+                name="amount"
+                inputMode="decimal"
+                placeholder="0,00"
+                defaultValue={centsToInput(document?.amountCents)}
               />
             </Field>
           </div>

@@ -8,6 +8,10 @@ try {
 }
 
 const PORT = Number(process.env.E2E_PORT ?? 3100);
+// OCR läuft in den Tests gegen einen lokalen Nachbau der Azure-API (e2e/mock-azure.mjs) –
+// es werden keine echten Zugangsdaten gebraucht und keine Dokumente an Azure geschickt.
+const MOCK_AZURE_PORT = PORT + 1;
+const MOCK_AZURE_KEY = "e2e-test-key";
 
 /**
  * End-to-End-Tests gegen den Produktions-Build. Sie schreiben in die Datenbank aus
@@ -40,10 +44,24 @@ export default defineConfig({
       use: { ...devices["Pixel 7"], channel: "chrome" },
     },
   ],
-  webServer: {
-    command: `npx next start -p ${PORT}`,
-    url: `http://localhost:${PORT}/login`,
-    reuseExistingServer: true,
-    timeout: 60_000,
-  },
+  webServer: [
+    {
+      command: "node e2e/mock-azure.mjs",
+      url: `http://localhost:${MOCK_AZURE_PORT}/health`,
+      env: { MOCK_AZURE_PORT: String(MOCK_AZURE_PORT), MOCK_AZURE_KEY },
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
+      command: `npx next start -p ${PORT}`,
+      url: `http://localhost:${PORT}/login`,
+      env: {
+        AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: `http://localhost:${MOCK_AZURE_PORT}`,
+        AZURE_DOCUMENT_INTELLIGENCE_KEY: MOCK_AZURE_KEY,
+      },
+      // Bewusst kein Wiederverwenden: ein bereits laufender Server hätte die OCR-Variablen nicht.
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+  ],
 });

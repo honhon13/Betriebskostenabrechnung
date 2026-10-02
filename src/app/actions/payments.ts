@@ -31,6 +31,10 @@ async function attachProof(
       documentDate: input.paymentDate,
       supplier: null,
       invoiceNumber: null,
+      servicePeriodStart: null,
+      servicePeriodEnd: null,
+      netAmount: null,
+      taxAmount: null,
       amount: input.amount,
     });
   } catch (error) {

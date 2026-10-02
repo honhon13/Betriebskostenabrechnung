@@ -29,10 +29,11 @@ import {
 import { listUnits } from "@/services/masterdata.service";
 import { pickDefaultPeriod } from "@/services/periods.service";
 import type { SessionUser } from "@/types/auth";
-import type { DocumentDto, OcrStatus, PeriodDto } from "@/types/billing";
+import type { DocumentDto, OcrFields, PeriodDto } from "@/types/billing";
 
 import { DocumentFields, type DocumentFormOptions } from "./document-fields";
 import { DocumentPreviewButton } from "./document-preview";
+import { OcrStatusBadge } from "./ocr-status";
 import { DocumentUploadDialog } from "./document-upload";
 
 const ALL = "alle";
@@ -43,12 +44,25 @@ const SORT_LABELS: Record<DocumentSort, string> = {
   name: "Dateiname A–Z",
 };
 
-const OCR_LABEL: Record<OcrStatus, { label: string; tone: "neutral" | "success" | "warning" | "danger" }> = {
-  none: { label: "Nicht ausgelesen", tone: "neutral" },
-  pending: { label: "OCR läuft", tone: "warning" },
-  done: { label: "OCR ausgelesen", tone: "success" },
-  failed: { label: "OCR fehlgeschlagen", tone: "danger" },
-};
+/** Von der OCR erkannte Werte als kurze Aufzählung – für den Hinweis im Bearbeiten-Dialog. */
+function describeOcr(ocr: OcrFields): string {
+  return (
+    [
+      ocr.supplier,
+      ocr.invoiceNumber && `Nr. ${ocr.invoiceNumber}`,
+      ocr.documentDate && `Datum ${formatDate(ocr.documentDate)}`,
+      (ocr.servicePeriodStart || ocr.servicePeriodEnd) &&
+        `Leistung ${formatDate(ocr.servicePeriodStart)} – ${formatDate(ocr.servicePeriodEnd)}`,
+      ocr.netAmountCents !== null && `netto ${formatCents(ocr.netAmountCents)}`,
+      ocr.taxAmountCents !== null &&
+        `MwSt. ${formatCents(ocr.taxAmountCents)}${ocr.taxRate ? ` (${ocr.taxRate})` : ""}`,
+      ocr.amountCents !== null && `brutto ${formatCents(ocr.amountCents)}`,
+      ocr.description,
+    ]
+      .filter(Boolean)
+      .join(" · ") || "Keine Rechnungsdaten erkannt."
+  );
+}
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -119,6 +133,8 @@ export async function DocumentManager({
       key: "file",
       header: "Dokument",
       mobile: false,
+      // Mindestbreite, damit Dateinamen an Bindestrichen statt mitten im Wort umbrechen.
+      className: "md:min-w-52",
       cell: (document) => (
         <div className="max-w-72">
           <DocumentPreviewButton document={document} variant="link" />
@@ -175,25 +191,43 @@ export async function DocumentManager({
       key: "details",
       header: "Rechnungsdaten",
       cell: (document) => {
-        const parts = [
-          document.supplier,
-          document.invoiceNumber && `Nr. ${document.invoiceNumber}`,
-          document.documentDate && formatDate(document.documentDate),
-          document.amountCents !== null && formatCents(document.amountCents),
-        ].filter(Boolean);
+        const lines = [
+          [document.supplier, document.invoiceNumber && `Nr. ${document.invoiceNumber}`],
+          [
+            document.documentDate && formatDate(document.documentDate),
+            (document.servicePeriodStart || document.servicePeriodEnd) &&
+              `Leistung ${formatDate(document.servicePeriodStart)} – ${formatDate(document.servicePeriodEnd)}`,
+          ],
+          [
+            document.netAmountCents !== null && `netto ${formatCents(document.netAmountCents)}`,
+            document.taxAmountCents !== null && `MwSt. ${formatCents(document.taxAmountCents)}`,
+            document.amountCents !== null && `brutto ${formatCents(document.amountCents)}`,
+          ],
+        ]
+          .map((parts) => parts.filter(Boolean).join(" · "))
+          .filter(Boolean);
         return (
-          <>
-            {parts.length > 0 ? parts.join(" · ") : <span className="text-subtle">–</span>}
-            {canOcr && document.ocrStatus !== "none" ? (
-              <span className="mt-1 block">
-                <Badge tone={OCR_LABEL[document.ocrStatus].tone}>
-                  {OCR_LABEL[document.ocrStatus].label}
-                </Badge>
-              </span>
+          <div className="space-y-1">
+            {lines.length === 0 ? (
+              <span className="text-subtle">–</span>
+            ) : (
+              <ul className="space-y-0.5">
+                {lines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+            {/* Der OCR-Status ist ein Arbeitsstand der Verwaltung – USER sehen ihn nicht. */}
+            {canOcr ? (
+              <p className="flex items-center justify-end gap-1.5 text-xs text-muted md:justify-start">
+                OCR
+                <OcrStatusBadge status={document.ocrStatus} error={document.ocrError} />
+              </p>
             ) : null}
-          </>
+          </div>
         );
       },
+      className: "md:min-w-56",
     },
     {
       key: "uploaded",
@@ -219,6 +253,7 @@ export async function DocumentManager({
                 {...formOptions}
                 defaultPeriodId={defaultPeriodId}
                 lockPeriod={Boolean(lockedPeriod)}
+                ocrAvailable={canOcr && ocrAvailable}
               />
             ) : null
           }
@@ -239,7 +274,7 @@ export async function DocumentManager({
                 type="search"
                 name="q"
                 defaultValue={search}
-                placeholder="Dateiname, Beschreibung, Lieferant …"
+                placeholder="Dateiname, Beschreibung, Rechnungssteller …"
                 className="pl-9"
               />
             </span>
@@ -338,9 +373,9 @@ export async function DocumentManager({
                   {canOcr && ocrAvailable ? (
                     <ConfirmAction
                       trigger={<ScanText aria-hidden />}
-                      triggerLabel={`${document.fileName} per OCR auslesen`}
-                      title="Dokument per OCR auslesen?"
-                      description="Die Datei wird zur Texterkennung an Azure Document Intelligence übertragen. Erkannte Werte ergänzen nur leere Felder."
+                      triggerLabel={`${document.fileName} ${document.ocrStatus === "done" ? "erneut " : ""}per OCR auslesen`}
+                      title={document.ocrStatus === "done" ? "Erneut per OCR auslesen?" : "Dokument per OCR auslesen?"}
+                      description="Die Datei wird zur Texterkennung an Azure Document Intelligence übertragen. Erkannte Werte ergänzen nur leere Felder – bereits Eingetragenes bleibt unverändert."
                       confirmLabel="Auslesen"
                       action={runDocumentOcrAction.bind(null, document.id)}
                     />
@@ -355,16 +390,13 @@ export async function DocumentManager({
                       description={document.fileName}
                       action={updateDocumentAction.bind(null, document.id)}
                     >
-                      {document.ocr ? (
+                      {document.ocrStatus === "failed" ? (
+                        <Alert tone="danger" title="OCR-Fehler">
+                          {document.ocrError ?? "Die OCR-Auswertung ist fehlgeschlagen."}
+                        </Alert>
+                      ) : document.ocr ? (
                         <Alert tone="info" title="Von OCR erkannt">
-                          {[
-                            document.ocr.documentDate && `Datum ${formatDate(document.ocr.documentDate)}`,
-                            document.ocr.invoiceNumber && `Nr. ${document.ocr.invoiceNumber}`,
-                            document.ocr.supplier,
-                            document.ocr.amountCents !== null && formatCents(document.ocr.amountCents),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ") || "Keine Felder erkannt."}
+                          {describeOcr(document.ocr)}
                         </Alert>
                       ) : null}
                       <DocumentFields
