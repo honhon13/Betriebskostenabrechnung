@@ -60,7 +60,6 @@ src/
   components/    UI-Bausteine (ui, forms, layout) und Fachkomponenten
   auth/          Passwort-Hashing, Sitzungen, Rechtekatalog, RBAC-Prüfungen
   services/      Fachlogik mit Rechteprüfung – einziger Weg zur Datenbank
-    storage/     Ablage der Dokumentdateien (lokal, Vercel Blob, S3-kompatibel)
     ocr/         OCRService (Azure Document Intelligence)
   db/            Drizzle-Schema, Migrationen, Seed
   lib/           Reine Hilfsfunktionen: Verteilung, Monatsübersicht, Beträge, Validierung
@@ -103,7 +102,7 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
 | `costs`, `cost_units` | Kostenpositionen und ihre TOP-Zuordnung |
 | `payments` | Einzahlungen je TOP mit Zahlungsstatus |
-| `documents`, `document_links` | Dokumente (Metadaten, Verweis auf den Storage) und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
+| `documents`, `document_files`, `document_links` | Dokumente (Metadaten), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
 
 ### Erweitern
 
@@ -112,32 +111,30 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | Neues Recht | Eintrag in `src/auth/permissions.ts`, Prüfung im Service |
 | Neue Rolle | In der Oberfläche anlegen oder `ROLE_DEFINITIONS` ergänzen |
 | Neuer Umlageschlüssel | *Einstellungen → Stammdaten* (Werte je Abrechnungsjahr) |
-| Anderer Datei-Speicher | Klasse mit `StorageService` + Eintrag in `services/storage/index.ts` |
 | Anderer OCR-Anbieter | Klasse mit `OCRService` + `services/ocr/index.ts` |
 | Schemaänderung | `src/db/schema.ts` ändern → `npm run db:generate` → `npm run db:migrate` |
 
-## Dokumente, Storage und OCR
+## Dokumente und OCR
 
-Dateien liegen nie in PostgreSQL – die Tabelle `documents` speichert nur Anbieter und
-Schlüssel. Jeder Abruf läuft über `/api/dokumente/[id]/datei` und wird dort gegen Sitzung,
-Rechte und Sichtbereich geprüft. Erlaubt sind PDF, JPEG, PNG, WebP, HEIC und TIFF bis 4 MB
-(Grenze der Vercel Functions); der Typ wird am Dateiinhalt erkannt. Größere Fotos verkleinert
-der Browser vor dem Upload.
+Dokumente liegen vollständig in der Neon-Datenbank – es gibt keinen externen Dateispeicher.
+`documents` hält die Metadaten, `document_files` den Dateiinhalt (bytea). Die Trennung sorgt
+dafür, dass Listen und Auswertungen nie Dateien mitladen; gelesen wird der Inhalt nur für
+Vorschau, Download und OCR. Upload und Löschen sind je eine Transaktion: Metadaten, Datei und
+Verknüpfungen entstehen bzw. verschwinden gemeinsam.
+
+Jeder Abruf läuft über `/api/dokumente/[id]/datei` und wird dort gegen Sitzung, Rechte und
+Sichtbereich geprüft. Erlaubt sind PDF, JPEG, PNG, WebP, HEIC und TIFF bis 4 MB (Grenze der
+Vercel Functions); der Typ wird am Dateiinhalt erkannt. Größere Fotos verkleinert der Browser
+vor dem Upload.
 
 Dokumente lassen sich an drei Stellen hochladen: in der Dokumentenverwaltung, direkt beim
 Erfassen einer Kostenposition (als Rechnung) und bei einer Einzahlung (als Zahlungsnachweis).
 Ein Dokument kann mit mehreren Kostenpositionen verknüpft sein, z. B. eine Vorschreibung, die
 auf mehrere Positionen aufgeteilt wurde.
 
-| `STORAGE_DRIVER` | Verwendung |
-| --- | --- |
-| `local` | Dateisystem unter `.data/uploads` – nur lokale Entwicklung |
-| `vercel-blob` | Privater Vercel-Blob-Store, benötigt `BLOB_READ_WRITE_TOKEN` |
-| `s3` | S3-kompatibler Speicher (AWS S3, Cloudflare R2, MinIO …) mit privatem Bucket, `S3_*`-Variablen |
-
-Ohne Angabe wählt die App automatisch: Vercel Blob, sobald ein Token gesetzt ist, sonst S3,
-sobald Endpoint und Bucket gesetzt sind, sonst lokal. Jedes Dokument merkt sich seinen
-Anbieter – ein späterer Wechsel bricht bestehende Dokumente nicht.
+Die Dateien zählen zum Speicherplatz der Datenbank. Der kostenlose Neon-Plan erlaubt rund
+1 GB je Branch – bei 4 MB je Datei also mindestens etwa 250 Dokumente, bei typischen
+PDF-Rechnungen deutlich mehr.
 
 OCR ist vorbereitet und wird aktiv, sobald `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` und
 `AZURE_DOCUMENT_INTELLIGENCE_KEY` gesetzt sind. Dann erscheint bei jedem Dokument „per OCR
@@ -150,11 +147,8 @@ auslesen": Datum, Rechnungsnummer, Lieferant und Betrag werden mit dem Modell
    `vercel.json` – passend zur Neon-Region Frankfurt).
 2. Unter *Storage* die Neon-Datenbank mit dem Projekt verbinden. Die Integration setzt
    `DATABASE_URL` und `DATABASE_URL_UNPOOLED` automatisch.
-3. Unter *Storage* einen **privaten** Blob-Store anlegen und verbinden
-   (`BLOB_READ_WRITE_TOKEN`) – oder die `S3_*`-Variablen setzen. Ohne dauerhaften Speicher
-   sind Uploads auf Vercel deaktiviert.
-4. Optional die Azure-Variablen für OCR setzen.
-5. Deployen. Vercel ruft `npm run vercel-build` auf: bei einem **Production**-Deployment
+3. Optional die Azure-Variablen für OCR setzen.
+4. Deployen. Vercel ruft `npm run vercel-build` auf: bei einem **Production**-Deployment
    laufen zuerst die ausstehenden Migrationen, dann der Build. Schlägt eine Migration fehl,
    bricht das Deployment ab und die bisherige Version bleibt online. Preview-Deployments
    ändern das Schema nicht (sie teilen sich die Datenbank mit der Produktion).
@@ -167,7 +161,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Beträge, RBAC, Passwörter, Storage, Service-Rechte |
+| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Beträge, RBAC, Passwörter, Service-Rechte |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |
