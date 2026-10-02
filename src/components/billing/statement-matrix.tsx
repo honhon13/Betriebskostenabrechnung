@@ -44,11 +44,14 @@ export function StatementMatrix({ statement }: { statement: Statement }) {
                 <span className="font-medium">{line.description}</span>
                 <span className="flex items-center gap-2 text-xs text-muted">
                   {line.categoryName}
-                  {line.receiptCount > 0 ? (
-                    <span className="inline-flex items-center gap-0.5" title={`${line.receiptCount} Beleg(e)`}>
+                  {line.documents.length > 0 ? (
+                    <span
+                      className="inline-flex items-center gap-0.5"
+                      title={`${line.documents.length} Dokument(e)`}
+                    >
                       <Paperclip className="size-3" aria-hidden />
-                      {line.receiptCount}
-                      <span className="sr-only"> Belege</span>
+                      {line.documents.length}
+                      <span className="sr-only"> Dokumente</span>
                     </span>
                   ) : null}
                 </span>

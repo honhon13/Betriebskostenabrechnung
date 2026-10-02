@@ -14,6 +14,7 @@ test.describe("Mobil", () => {
     await expect(page.getByRole("button", { name: "Logout" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Einstellungen" })).toBeVisible();
 
+    await expect(nav.getByRole("link", { name: "Dokumente" })).toBeVisible();
     await nav.getByRole("link", { name: "Einzahlungen" }).click();
     await expect(page).toHaveURL(/\/einzahlungen/);
     await expect(nav).toBeHidden();
@@ -23,11 +24,14 @@ test.describe("Mobil", () => {
     await login(page, "top2");
     for (const path of [
       "/dashboard",
+      "/abrechnung",
       `/abrechnung/${RELEASED_YEAR}`,
+      `/abrechnung/${RELEASED_YEAR}/monate`,
       `/abrechnung/${CURRENT_YEAR}/kosten`,
       `/abrechnung/${CURRENT_YEAR}/schluessel`,
       `/abrechnung/${CURRENT_YEAR}/belege`,
       "/einzahlungen",
+      "/dokumente",
       "/einstellungen",
       "/einstellungen/stammdaten",
       "/einstellungen/benutzer",

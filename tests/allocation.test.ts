@@ -4,9 +4,11 @@ import {
   allocate,
   buildStatement,
   restrictStatementToUnit,
+  summarizeStatement,
   toMilli,
   type StatementInput,
 } from "@/lib/billing/allocation";
+import { buildMonthlyOverview } from "@/lib/billing/monthly";
 
 const cents = (result: ReturnType<typeof allocate>) => result.shares.map((s) => s.cents);
 
@@ -116,7 +118,8 @@ const input: StatementInput = {
       keyUnitLabel: "m²",
       keySource: "unit_area",
       unitIds: [1, 2, 3],
-      receiptCount: 1,
+      documents: [{ id: 7, fileName: "versicherung.pdf", type: "invoice", mimeType: "application/pdf" }],
+      createdAt: "2025-01-11T08:00:00.000Z",
     },
     {
       id: 11,
@@ -130,7 +133,8 @@ const input: StatementInput = {
       keyUnitLabel: "",
       keySource: "equal",
       unitIds: [1],
-      receiptCount: 0,
+      documents: [],
+      createdAt: "2025-09-19T08:00:00.000Z",
     },
     {
       id: 12,
@@ -144,7 +148,8 @@ const input: StatementInput = {
       keyUnitLabel: "m³",
       keySource: "manual",
       unitIds: [1, 2, 3],
-      receiptCount: 0,
+      documents: [],
+      createdAt: "2025-12-16T08:00:00.000Z",
     },
   ],
   values: [
@@ -155,8 +160,11 @@ const input: StatementInput = {
   ],
   payments: [
     { unitId: 1, amountCents: 600_00 },
-    { unitId: 1, amountCents: 100_00 },
+    { unitId: 1, amountCents: 100_00, status: "received" },
     { unitId: 2, amountCents: 250_00 },
+    // Erwartet bzw. storniert – beides darf den Saldo nicht verändern.
+    { unitId: 2, amountCents: 40_00, status: "pending" },
+    { unitId: 3, amountCents: 999_00, status: "cancelled" },
   ],
 };
 
@@ -164,11 +172,28 @@ describe("buildStatement", () => {
   const statement = buildStatement(input);
 
   it("berechnet Kostenanteil, Einzahlungen und Saldo je TOP", () => {
+    const balance = (costCents: number, paymentCents: number, pendingPaymentCents = 0) => ({
+      costCents,
+      paymentCents,
+      pendingPaymentCents,
+      balanceCents: paymentCents - costCents,
+    });
     expect(statement.balances).toEqual([
-      { unitId: 1, unitName: "TOP 1", costCents: 689_00, paymentCents: 700_00, balanceCents: 11_00 },
-      { unitId: 2, unitName: "TOP 2", costCents: 300_00, paymentCents: 250_00, balanceCents: -50_00 },
-      { unitId: 3, unitName: "TOP 3", costCents: 200_00, paymentCents: 0, balanceCents: -200_00 },
+      { unitId: 1, unitName: "TOP 1", ...balance(689_00, 700_00) },
+      { unitId: 2, unitName: "TOP 2", ...balance(300_00, 250_00, 40_00) },
+      { unitId: 3, unitName: "TOP 3", ...balance(200_00, 0) },
     ]);
+  });
+
+  it("zählt nur eingegangene Einzahlungen – offene und stornierte nicht", () => {
+    expect(statement.totalPaymentCents).toBe(950_00);
+    expect(statement.balances[1].balanceCents).toBe(-50_00);
+    expect(statement.balances[2].paymentCents).toBe(0);
+  });
+
+  it("reicht verknüpfte Dokumente je Kostenposition durch", () => {
+    expect(statement.lines.find((l) => l.costId === 10)?.documents).toHaveLength(1);
+    expect(statement.lines.find((l) => l.costId === 11)?.documents).toEqual([]);
   });
 
   it("weist Kosten ohne Schlüsselwerte als unverteilt aus", () => {
@@ -200,5 +225,75 @@ describe("restrictStatementToUnit", () => {
     const none = restrictStatementToUnit(buildStatement(input), null);
     expect(none.lines).toEqual([]);
     expect(none.balances).toEqual([]);
+  });
+});
+
+describe("summarizeStatement", () => {
+  const statement = buildStatement(input);
+
+  it("rechnet über alle TOPs mit dem vollen Betrag, auch für noch nicht verteilte Kosten", () => {
+    expect(summarizeStatement(statement, true)).toEqual({
+      costCents: 1489_00,
+      paymentCents: 950_00,
+      pendingPaymentCents: 40_00,
+      balanceCents: 950_00 - 1489_00,
+    });
+  });
+
+  it("rechnet für eine einzelne TOP nur mit ihrem Anteil", () => {
+    const own = restrictStatementToUnit(statement, 1);
+    expect(summarizeStatement(own, false)).toEqual({
+      costCents: 689_00,
+      paymentCents: 700_00,
+      pendingPaymentCents: 0,
+      balanceCents: 11_00,
+    });
+  });
+});
+
+describe("buildMonthlyOverview", () => {
+  const overview = buildMonthlyOverview(
+    2025,
+    [
+      { date: "2025-01-10", cents: 1000_00 },
+      { date: "2025-01-31", cents: 50_00 },
+      { date: "2025-12-15", cents: 300_00 },
+      { date: null, cents: 189_00 },
+    ],
+    [
+      { date: "2025-01-05", cents: 450_00 },
+      { date: "2025-02-05", cents: 450_00 },
+      // Nachzahlung im Folgejahr – gehört zum Abrechnungsjahr, aber in keinen seiner Monate.
+      { date: "2026-03-01", cents: 200_00 },
+    ],
+  );
+
+  it("ordnet Kosten und Einzahlungen den Monaten zu", () => {
+    expect(overview.rows).toHaveLength(12);
+    expect(overview.rows[0]).toEqual({
+      month: 1,
+      costCents: 1050_00,
+      paymentCents: 450_00,
+      differenceCents: -600_00,
+      cumulativeCents: -600_00,
+    });
+    expect(overview.rows[1]).toMatchObject({ month: 2, costCents: 0, paymentCents: 450_00, cumulativeCents: -150_00 });
+    expect(overview.rows[11]).toMatchObject({ month: 12, costCents: 300_00, cumulativeCents: -450_00 });
+  });
+
+  it("sammelt Einträge ohne Datum bzw. außerhalb des Jahres, damit die Summen stimmen", () => {
+    expect(overview.other).toEqual({
+      month: null,
+      costCents: 189_00,
+      paymentCents: 200_00,
+      differenceCents: 11_00,
+      cumulativeCents: -439_00,
+    });
+    expect(overview.totalCostCents).toBe(1539_00);
+    expect(overview.totalPaymentCents).toBe(1100_00);
+  });
+
+  it("lässt die Sammelzeile weg, wenn alles in den Monaten liegt", () => {
+    expect(buildMonthlyOverview(2025, [{ date: "2025-06-01", cents: 1 }], []).other).toBeNull();
   });
 });

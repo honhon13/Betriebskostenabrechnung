@@ -37,7 +37,7 @@ const PERMISSION_GROUPS: { title: string; prefix: string }[] = [
   { title: "Abrechnungsjahre", prefix: "period" },
   { title: "Kosten", prefix: "cost" },
   { title: "Einzahlungen", prefix: "payment" },
-  { title: "Belege", prefix: "receipt" },
+  { title: "Dokumente", prefix: "document" },
   { title: "Verwaltung", prefix: "masterdata" },
   { title: "Benutzer", prefix: "user" },
   { title: "Datenumfang", prefix: "scope" },

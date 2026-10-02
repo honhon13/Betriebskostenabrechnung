@@ -1,9 +1,10 @@
-import { Lock, Paperclip, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
+import { Lock, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
 import type { Metadata } from "next";
 
 import { createCostAction, deleteCostAction, updateCostAction } from "@/app/actions/billing";
 import { can, getDataScope } from "@/auth/rbac";
 import { CostFields } from "@/components/billing/cost-fields";
+import { DocumentChips } from "@/components/documents/document-preview";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { Alert } from "@/components/ui/alert";
@@ -16,20 +17,32 @@ import { formatCents, formatDate } from "@/lib/format";
 import { listCosts } from "@/services/costs.service";
 import { listAllocationKeys, listCategories, listUnits } from "@/services/masterdata.service";
 import { loadPeriodPage } from "@/services/page-context";
+import { listPeriods } from "@/services/periods.service";
 import type { CostDto } from "@/types/billing";
 
 export const metadata: Metadata = { title: "Kosten" };
 
-export default async function CostsPage({ params }: PageProps<"/abrechnung/[jahr]/kosten">) {
+export default async function CostsPage({
+  params,
+  searchParams,
+}: PageProps<"/abrechnung/[jahr]/kosten">) {
   const { user, period } = await loadPeriodPage((await params).jahr);
   if (!can(user, "cost:read") || !getDataScope(user).allUnits) return <NoAccess />;
 
-  const [costs, categories, allocationKeys, units] = await Promise.all([
+  const [costs, categories, allocationKeys, units, periods] = await Promise.all([
     listCosts(user, period.id),
     listCategories(),
     listAllocationKeys(),
     listUnits(user),
+    listPeriods(user),
   ]);
+  // ?position=12 – Sprungziel aus der Dokumentenverwaltung.
+  const highlighted = Number((await searchParams).position);
+  // Kosten lassen sich nur in Jahren erfassen, die noch nicht freigegeben sind.
+  const draftPeriods = periods
+    .filter((p) => p.status === "draft")
+    .map((p) => ({ id: p.id, year: p.year }));
+  const allowUpload = can(user, "document:write");
 
   const draft = period.status === "draft";
   const canWrite = draft && can(user, "cost:write");
@@ -68,17 +81,9 @@ export default async function CostsPage({ params }: PageProps<"/abrechnung/[jahr
         ),
     },
     {
-      key: "receipts",
+      key: "documents",
       header: "Belege",
-      cell: (cost) =>
-        cost.receiptCount > 0 ? (
-          <span className="inline-flex items-center gap-1">
-            <Paperclip className="size-3.5 text-subtle" aria-hidden />
-            {cost.receiptCount}
-          </span>
-        ) : (
-          <span className="text-subtle">–</span>
-        ),
+      cell: (cost) => <DocumentChips documents={cost.documents} />,
     },
     {
       key: "amount",
@@ -100,9 +105,16 @@ export default async function CostsPage({ params }: PageProps<"/abrechnung/[jahr
       triggerVariant="primary"
       title="Kosten erfassen"
       description={`Abrechnungsjahr ${period.year}`}
-      action={createCostAction.bind(null, period.id)}
+      action={createCostAction}
     >
-      <CostFields categories={categories} allocationKeys={allocationKeys} units={units} />
+      <CostFields
+        periods={draftPeriods}
+        periodId={period.id}
+        categories={categories}
+        allocationKeys={allocationKeys}
+        units={units}
+        allowUpload={allowUpload}
+      />
     </FormDialog>
   ) : null;
 
@@ -136,6 +148,7 @@ export default async function CostsPage({ params }: PageProps<"/abrechnung/[jahr
               rows={costs}
               columns={columns}
               rowKey={(cost) => cost.id}
+              highlight={(cost) => cost.id === highlighted}
               mobileTitle={(cost) => (
                 <>
                   {cost.description}
@@ -157,10 +170,13 @@ export default async function CostsPage({ params }: PageProps<"/abrechnung/[jahr
                             action={updateCostAction.bind(null, cost.id)}
                           >
                             <CostFields
+                              periods={draftPeriods}
+                              periodId={period.id}
                               categories={categories}
                               allocationKeys={allocationKeys}
                               units={units}
                               cost={cost}
+                              allowUpload={allowUpload}
                             />
                           </FormDialog>
                         ) : null}
@@ -172,7 +188,7 @@ export default async function CostsPage({ params }: PageProps<"/abrechnung/[jahr
                             description={
                               <>
                                 „{cost.description}“ über {formatCents(cost.amountCents)} wird
-                                gelöscht. Verknüpfte Belege bleiben erhalten.
+                                gelöscht. Verknüpfte Dokumente bleiben erhalten.
                               </>
                             }
                             confirmLabel="Löschen"

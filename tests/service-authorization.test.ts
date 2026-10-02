@@ -7,7 +7,7 @@ import * as costs from "@/services/costs.service";
 import * as masterdata from "@/services/masterdata.service";
 import * as payments from "@/services/payments.service";
 import * as periods from "@/services/periods.service";
-import * as receipts from "@/services/receipts.service";
+import * as documents from "@/services/documents.service";
 import * as users from "@/services/users.service";
 import type { SessionUser } from "@/types/auth";
 
@@ -30,6 +30,7 @@ const user: SessionUser = {
 };
 
 const cost = {
+  periodId: 1,
   categoryId: 1,
   description: "x",
   amount: 100,
@@ -40,8 +41,26 @@ const cost = {
   unitIds: [1],
   notes: null,
 };
-const payment = { periodId: 1, unitId: 2, paymentDate: "2025-01-01", amount: 100, purpose: null, note: null };
-const receiptMeta = { costId: null, documentDate: null, supplier: null, invoiceNumber: null, amount: null, notes: null };
+const payment = {
+  periodId: 1,
+  unitId: 2,
+  paymentDate: "2025-01-01",
+  amount: 100,
+  purpose: null,
+  note: null,
+  status: "received" as const,
+};
+const documentMeta = {
+  type: "invoice" as const,
+  description: null,
+  unitId: null,
+  costIds: [1],
+  paymentId: null,
+  documentDate: null,
+  supplier: null,
+  invoiceNumber: null,
+  amount: null,
+};
 const file = { name: "x.pdf", bytes: Buffer.from("%PDF-1.4") };
 const key = { name: "x", unitLabel: "", description: null, isActive: true };
 const category = { name: "x", description: null, defaultAllocationKeyId: null, isActive: true };
@@ -53,7 +72,7 @@ const forbiddenForUser: Record<string, () => Promise<unknown>> = {
   deletePeriod: () => periods.deletePeriod(user, 1),
   // Kosten & Umlageschlüssel
   listCosts: () => costs.listCosts(user, 1),
-  createCost: () => costs.createCost(user, 1, cost),
+  createCost: () => costs.createCost(user, cost),
   updateCost: () => costs.updateCost(user, 1, cost),
   deleteCost: () => costs.deleteCost(user, 1),
   listAllocationValues: () => allocation.listAllocationValues(user, 1),
@@ -63,11 +82,12 @@ const forbiddenForUser: Record<string, () => Promise<unknown>> = {
   createPayment: () => payments.createPayment(user, payment),
   updatePayment: () => payments.updatePayment(user, 1, payment),
   deletePayment: () => payments.deletePayment(user, 1),
-  // Belege
-  uploadReceipt: () => receipts.uploadReceipt(user, 1, file, receiptMeta),
-  updateReceipt: () => receipts.updateReceipt(user, 1, receiptMeta),
-  deleteReceipt: () => receipts.deleteReceipt(user, 1),
-  runReceiptOcr: () => receipts.runReceiptOcr(user, 1),
+  // Dokumente
+  uploadDocument: () => documents.uploadDocument(user, 1, file, documentMeta),
+  updateDocument: () => documents.updateDocument(user, 1, 1, documentMeta),
+  deleteDocument: () => documents.deleteDocument(user, 1),
+  runDocumentOcr: () => documents.runDocumentOcr(user, 1),
+  listLinkOptions: () => documents.listLinkOptions(user),
   // Stammdaten
   updateUnit: () => masterdata.updateUnit(user, 1, { name: "x", areaSqm: null, persons: null, notes: null }),
   createCategory: () => masterdata.createCategory(user, category),
@@ -95,7 +115,7 @@ describe("Services lehnen USER serverseitig ab", () => {
   });
 
   it("deckt jede schreibende Service-Funktion ab", () => {
-    const mutating = [allocation, costs, masterdata, payments, periods, receipts, users]
+    const mutating = [allocation, costs, documents, masterdata, payments, periods, users]
       .flatMap((module) => Object.keys(module))
       .filter((name) => /^(create|update|delete|set|save|reset|upload|run)/.test(name));
     const covered = new Set([

@@ -11,8 +11,11 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  // Lokal abgelegte Belege gehören nicht in das Deployment-Bundle.
-  outputFileTracingExcludes: { "*": [".data/**"] },
+  experimental: {
+    // Kosten und Einzahlungen können beim Speichern direkt einen Beleg mitschicken.
+    // Etwas über dem Upload-Limit von 4 MB, damit die Formularfelder noch Platz haben.
+    serverActions: { bodySizeLimit: "5mb" },
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

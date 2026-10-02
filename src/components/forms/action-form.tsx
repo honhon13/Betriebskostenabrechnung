@@ -6,6 +6,9 @@ import { useState, useTransition, type ReactNode, type SubmitEvent } from "react
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { ActionState } from "@/lib/action-state";
+import { MAX_UPLOAD_BYTES } from "@/lib/files";
+import { formatFileSize } from "@/lib/format";
+import { shrinkImage } from "@/lib/image-resize";
 import { cn } from "@/lib/utils";
 
 import { FieldErrorsContext } from "./field";
@@ -53,6 +56,25 @@ export function ActionForm({
     const formData = new FormData(form);
 
     startTransition(async () => {
+      // Angehängte Dateien: große Fotos verkleinern, zu große Dateien gar nicht erst senden.
+      for (const [name, value] of [...formData.entries()]) {
+        if (!(value instanceof File)) continue;
+        if (value.size === 0) {
+          // Leeres Dateifeld gar nicht erst mitschicken.
+          formData.delete(name);
+          continue;
+        }
+        const file = await shrinkImage(value, MAX_UPLOAD_BYTES);
+        if (file.size > MAX_UPLOAD_BYTES) {
+          setState({
+            ok: false,
+            error: `„${value.name}“ ist größer als ${formatFileSize(MAX_UPLOAD_BYTES)}.`,
+          });
+          return;
+        }
+        formData.set(name, file);
+      }
+
       const result = await action(formData);
       setState(result);
       if (result?.ok) {

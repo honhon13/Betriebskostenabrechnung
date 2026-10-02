@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel-build": "tsx src/db/migrate.ts --vercel && next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
@@ -20,7 +21,6 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.0",
     "@vercel/functions": "^3.9.10",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.3",

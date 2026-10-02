@@ -1,35 +1,64 @@
 "use client";
 
-import { ChevronDown, LoaderCircle, Upload } from "lucide-react";
+import { LoaderCircle, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type SubmitEvent } from "react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { fileInputClass } from "@/components/ui/input";
 import { MAX_UPLOAD_BYTES, UPLOAD_ACCEPT } from "@/lib/files";
 import { formatFileSize } from "@/lib/format";
 import { shrinkImage } from "@/lib/image-resize";
 
+import { Dialog } from "../forms/dialog";
 import { FieldErrorsContext } from "../forms/field";
-import { ReceiptMetaFields, type CostOption } from "./receipt-meta-fields";
+import { DocumentFields, type DocumentFormOptions } from "./document-fields";
 
-interface ReceiptUploadProps {
-  periodId: number;
-  costs: CostOption[];
+interface DocumentUploadProps extends DocumentFormOptions {
+  defaultPeriodId: number;
+  lockPeriod?: boolean;
 }
 
 type Status = { tone: "success" | "danger"; message: string } | null;
 
-/** Upload-Formular für Belege. Die Datei geht per multipart an /api/belege. */
-export function ReceiptUpload({ periodId, costs }: ReceiptUploadProps) {
+/** Schaltfläche, die das Upload-Formular in einem Dialog öffnet. */
+export function DocumentUploadDialog(props: DocumentUploadProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>
+        <Upload aria-hidden />
+        Dokument hochladen
+      </Button>
+      {open ? (
+        <Dialog
+          title="Dokument hochladen"
+          description="Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen."
+          onClose={() => setOpen(false)}
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <DocumentUpload {...props} />
+          </div>
+        </Dialog>
+      ) : null}
+    </>
+  );
+}
+
+/** Upload-Formular für Dokumente. Die Datei geht per multipart an /api/dokumente. */
+function DocumentUpload(props: DocumentUploadProps) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>(null);
   const [pending, startTransition] = useTransition();
+  // Nach erfolgreichem Upload entstehen die Felder neu (leer, mit Standardwerten) –
+  // der Dialog bleibt offen, damit sich mehrere Dokumente nacheinander hochladen lassen.
+  const [formKey, setFormKey] = useState(0);
 
   function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = event.currentTarget;
-    const formData = new FormData(form);
+    const formData = new FormData(event.currentTarget);
     const selected = formData.get("file");
 
     if (!(selected instanceof File) || selected.size === 0) {
@@ -48,9 +77,8 @@ export function ReceiptUpload({ periodId, costs }: ReceiptUploadProps) {
           return;
         }
         formData.set("file", file);
-        formData.set("periodId", String(periodId));
 
-        const response = await fetch("/api/belege", { method: "POST", body: formData });
+        const response = await fetch("/api/dokumente", { method: "POST", body: formData });
         if (!response.ok) {
           const body = (await response.json().catch(() => null)) as { error?: string } | null;
           setStatus({
@@ -60,7 +88,7 @@ export function ReceiptUpload({ periodId, costs }: ReceiptUploadProps) {
           return;
         }
 
-        form.reset();
+        setFormKey((key) => key + 1);
         setStatus({ tone: "success", message: `„${selected.name}“ wurde hochgeladen.` });
         router.refresh();
       } catch {
@@ -70,7 +98,7 @@ export function ReceiptUpload({ periodId, costs }: ReceiptUploadProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form key={formKey} onSubmit={handleSubmit} className="space-y-4">
       <label className="block space-y-1.5">
         <span className="text-sm font-medium">Datei</span>
         <input
@@ -78,7 +106,7 @@ export function ReceiptUpload({ periodId, costs }: ReceiptUploadProps) {
           name="file"
           accept={UPLOAD_ACCEPT}
           required
-          className="block w-full cursor-pointer rounded-lg border border-dashed border-border-strong bg-surface text-sm text-muted file:mr-3 file:h-11 file:cursor-pointer file:border-0 file:bg-surface-muted file:px-4 file:text-sm file:font-medium file:text-foreground hover:border-primary focus-visible:outline-2 focus-visible:outline-ring"
+          className={fileInputClass}
         />
         <span className="block text-xs text-subtle">
           PDF oder Foto (JPEG, PNG, WebP, HEIC, TIFF) bis {formatFileSize(MAX_UPLOAD_BYTES)}. Größere
@@ -86,18 +114,10 @@ export function ReceiptUpload({ periodId, costs }: ReceiptUploadProps) {
         </span>
       </label>
 
-      <details className="group rounded-lg border border-border">
-        <summary className="flex h-10 cursor-pointer list-none items-center justify-between px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
-          Zuordnung und Metadaten
-          <ChevronDown className="size-4 text-muted transition-transform group-open:rotate-180" aria-hidden />
-        </summary>
-        <div className="space-y-4 border-t border-border p-3">
-          {/* Feldfehler kommen hier nicht einzeln zurück – die Meldung steht unter dem Formular. */}
-          <FieldErrorsContext value={{}}>
-            <ReceiptMetaFields costs={costs} />
-          </FieldErrorsContext>
-        </div>
-      </details>
+      {/* Feldfehler kommen hier nicht einzeln zurück – die Meldung steht unter dem Formular. */}
+      <FieldErrorsContext value={{}}>
+        <DocumentFields {...props} />
+      </FieldErrorsContext>
 
       {status ? <Alert tone={status.tone} title={status.message} /> : null}
 

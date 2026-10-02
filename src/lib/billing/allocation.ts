@@ -1,5 +1,7 @@
 import type {
   AllocationSource,
+  DocumentRef,
+  PaymentStatus,
   Statement,
   StatementLine,
   UnitBalance,
@@ -85,11 +87,13 @@ export interface StatementInput {
     keySource: AllocationSource;
     /** TOP-Zuordnung der Kostenposition. */
     unitIds: number[];
-    receiptCount: number;
+    documents: DocumentRef[];
+    createdAt: string;
   }[];
   /** Schlüsselwerte des Abrechnungsjahres. */
   values: { keyId: number; unitId: number; value: string | number }[];
-  payments: { unitId: number; amountCents: number }[];
+  /** Ohne Status gilt eine Einzahlung als eingegangen. */
+  payments: { unitId: number; amountCents: number; status?: PaymentStatus }[];
 }
 
 /** Berechnet die Abrechnung eines Jahres über alle TOPs. */
@@ -122,7 +126,8 @@ export function buildStatement(input: StatementInput): Statement {
       totalWeight: [...weightByUnit.values()].reduce((a, b) => a + Math.max(b, 0), 0),
       shares: shares.map((s) => ({ ...s, weight: Math.max(weightByUnit.get(s.unitId) ?? 0, 0) })),
       distributable,
-      receiptCount: cost.receiptCount,
+      documents: cost.documents,
+      createdAt: cost.createdAt,
     };
   });
 
@@ -131,14 +136,18 @@ export function buildStatement(input: StatementInput): Statement {
       (acc, line) => acc + (line.shares.find((s) => s.unitId === unit.id)?.cents ?? 0),
       0,
     );
-    const paymentCents = input.payments
-      .filter((p) => p.unitId === unit.id)
-      .reduce((acc, p) => acc + p.amountCents, 0);
+    // Nur eingegangene Zahlungen mindern den offenen Betrag; stornierte zählen nirgends.
+    const sumByStatus = (status: PaymentStatus) =>
+      input.payments
+        .filter((p) => p.unitId === unit.id && (p.status ?? "received") === status)
+        .reduce((acc, p) => acc + p.amountCents, 0);
+    const paymentCents = sumByStatus("received");
     return {
       unitId: unit.id,
       unitName: unit.name,
       costCents,
       paymentCents,
+      pendingPaymentCents: sumByStatus("pending"),
       balanceCents: paymentCents - costCents,
     };
   });
@@ -172,5 +181,29 @@ export function restrictStatementToUnit(statement: Statement, unitId: number | n
     undistributedCents: lines
       .filter((l) => !l.distributable)
       .reduce((acc, l) => acc + l.amountCents, 0),
+  };
+}
+
+export interface StatementTotals {
+  costCents: number;
+  paymentCents: number;
+  pendingPaymentCents: number;
+  /** Einzahlungen minus Kosten: positiv = Guthaben, negativ = Nachzahlung. */
+  balanceCents: number;
+}
+
+/**
+ * Summen einer Abrechnung. Über alle TOPs zählt der volle Betrag jeder Position
+ * (auch noch nicht verteilbare Kosten); für eine einzelne TOP nur ihr Anteil.
+ */
+export function summarizeStatement(statement: Statement, allUnits: boolean): StatementTotals {
+  const costCents = allUnits
+    ? statement.totalCostCents
+    : statement.balances.reduce((acc, b) => acc + b.costCents, 0);
+  return {
+    costCents,
+    paymentCents: statement.totalPaymentCents,
+    pendingPaymentCents: statement.balances.reduce((acc, b) => acc + b.pendingPaymentCents, 0),
+    balanceCents: statement.totalPaymentCents - costCents,
   };
 }

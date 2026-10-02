@@ -23,6 +23,8 @@ interface DataTableProps<T> {
   actions?: (row: T) => ReactNode;
   footer?: ReactNode;
   caption: string;
+  /** Hebt Zeilen hervor, z. B. die Position, zu der ein Link geführt hat. */
+  highlight?: (row: T) => boolean;
 }
 
 /**
@@ -38,6 +40,7 @@ export function DataTable<T>({
   actions,
   footer,
   caption,
+  highlight,
 }: DataTableProps<T>) {
   return (
     <>
@@ -67,7 +70,13 @@ export function DataTable<T>({
           </thead>
           <tbody className="divide-y divide-border">
             {rows.map((row) => (
-              <tr key={rowKey(row)} className="align-top hover:bg-surface-muted/50">
+              <tr
+                key={rowKey(row)}
+                className={cn(
+                  "align-top hover:bg-surface-muted/50",
+                  highlight?.(row) && "bg-primary-soft hover:bg-primary-soft",
+                )}
+              >
                 {columns.map((column) => (
                   <td
                     key={column.key}
@@ -94,7 +103,7 @@ export function DataTable<T>({
 
       <ul className="divide-y divide-border md:hidden">
         {rows.map((row) => (
-          <li key={rowKey(row)} className="px-4 py-3">
+          <li key={rowKey(row)} className={cn("px-4 py-3", highlight?.(row) && "bg-primary-soft")}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 font-medium">{mobileTitle(row)}</div>
               {mobileValue ? (

@@ -1,12 +1,22 @@
 import "server-only";
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
-import { and, desc, eq, exists, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 
 import { authorize, authorizeGlobalWrite, getDataScope } from "@/auth/rbac";
-import { getDb } from "@/db/client";
-import { costCategories, costs, costUnits, receipts } from "@/db/schema";
+import { getDb, type DbExecutor } from "@/db/client";
+import {
+  billingPeriods,
+  costCategories,
+  costs,
+  costUnits,
+  documentFiles,
+  documentLinks,
+  documents,
+  payments,
+  units,
+} from "@/db/schema";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import {
   ALLOWED_FILE_TYPES,
@@ -14,23 +24,158 @@ import {
   detectFileType,
   sanitizeFileName,
 } from "@/lib/files";
-import { formatFileSize } from "@/lib/format";
-import type { ReceiptMetaInput } from "@/lib/validation";
+import { formatCents, formatDate, formatFileSize } from "@/lib/format";
+import type { DocumentMetaInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
-import type { OcrFields, ReceiptDto } from "@/types/billing";
+import type {
+  DocumentDto,
+  DocumentLinkRef,
+  DocumentRef,
+  DocumentType,
+  OcrFields,
+} from "@/types/billing";
 
 import { getOcrService, OcrError, type OcrResult } from "./ocr";
 import { getVisiblePeriod } from "./periods.service";
-import { getDefaultStorageProvider, getStorage, isStoragePersistent, type StoredFile } from "./storage";
 
-type ReceiptRow = typeof receipts.$inferSelect;
+type DocumentRow = typeof documents.$inferSelect;
 
-function toDto(row: ReceiptRow, costLabel: string | null): ReceiptDto {
+// ---------------------------------------------------------------------------
+// Sichtbarkeit
+// ---------------------------------------------------------------------------
+
+/**
+ * Ein Dokument betrifft eine TOP, wenn es ihr direkt zugeordnet ist, an einer
+ * Kostenposition hängt, an der sie beteiligt ist, oder an einer ihrer Einzahlungen.
+ */
+function relevantToUnit(unitId: number): SQL {
+  const db = getDb();
+  return or(
+    eq(documents.unitId, unitId),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(documentLinks)
+        .innerJoin(costUnits, eq(costUnits.costId, documentLinks.costId))
+        .where(and(eq(documentLinks.documentId, documents.id), eq(costUnits.unitId, unitId))),
+    ),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(documentLinks)
+        .innerJoin(payments, eq(payments.id, documentLinks.paymentId))
+        .where(and(eq(documentLinks.documentId, documents.id), eq(payments.unitId, unitId))),
+    ),
+  )!;
+}
+
+/**
+ * Ohne scope:all_units sind nur Dokumente sichtbar, die die eigene TOP betreffen.
+ * Nicht zugeordnete Dokumente sieht nur die Verwaltung.
+ */
+function scopeCondition(actor: SessionUser): SQL | undefined {
+  const scope = getDataScope(actor);
+  if (scope.allUnits) return undefined;
+  if (scope.unitId === null) return sql`false`;
+  return relevantToUnit(scope.unitId);
+}
+
+/** Ohne scope:drafts nur Dokumente freigegebener Abrechnungsjahre. */
+function periodCondition(actor: SessionUser): SQL | undefined {
+  return getDataScope(actor).includeDrafts ? undefined : eq(billingPeriods.status, "released");
+}
+
+// ---------------------------------------------------------------------------
+// Lesen
+// ---------------------------------------------------------------------------
+
+export type DocumentSort = "newest" | "oldest" | "name";
+
+export interface DocumentFilter {
+  periodId?: number;
+  /** Nur Dokumente, die diese TOP betreffen (nur mit Blick auf alle TOPs wirksam). */
+  unitId?: number;
+  type?: DocumentType;
+  /** Volltext über Dateiname, Beschreibung, Lieferant, Rechnungsnummer, Kostenposition. */
+  search?: string;
+  sort?: DocumentSort;
+  limit?: number;
+}
+
+/** Lädt die Verknüpfungen zu Dokumenten – für eingeschränkte Benutzer nur die eigenen. */
+async function loadLinks(
+  actor: SessionUser,
+  documentIds: number[],
+): Promise<Map<number, { costs: DocumentLinkRef[]; payments: DocumentLinkRef[] }>> {
+  const result = new Map<number, { costs: DocumentLinkRef[]; payments: DocumentLinkRef[] }>();
+  for (const id of documentIds) result.set(id, { costs: [], payments: [] });
+  if (documentIds.length === 0) return result;
+
+  const db = getDb();
+  const scope = getDataScope(actor);
+  const rows = await db
+    .select({
+      documentId: documentLinks.documentId,
+      costId: costs.id,
+      costDescription: costs.description,
+      categoryName: costCategories.name,
+      paymentId: payments.id,
+      paymentDate: payments.paymentDate,
+      paymentAmount: payments.amountCents,
+      paymentUnitId: payments.unitId,
+      paymentUnitName: units.name,
+    })
+    .from(documentLinks)
+    .leftJoin(costs, eq(costs.id, documentLinks.costId))
+    .leftJoin(costCategories, eq(costCategories.id, costs.categoryId))
+    .leftJoin(payments, eq(payments.id, documentLinks.paymentId))
+    .leftJoin(units, eq(units.id, payments.unitId))
+    .where(inArray(documentLinks.documentId, documentIds))
+    .orderBy(asc(documentLinks.id));
+
+  // Eine TOP soll an „ihrem“ Dokument keine fremden Kostenpositionen oder Zahlungen ablesen können.
+  let ownCostIds: Set<number> | null = null;
+  if (!scope.allUnits) {
+    const costIds = rows.flatMap((row) => (row.costId === null ? [] : [row.costId]));
+    const own =
+      costIds.length === 0 || scope.unitId === null
+        ? []
+        : await db
+            .select({ costId: costUnits.costId })
+            .from(costUnits)
+            .where(and(inArray(costUnits.costId, costIds), eq(costUnits.unitId, scope.unitId)));
+    ownCostIds = new Set(own.map((row) => row.costId));
+  }
+
+  for (const row of rows) {
+    const entry = result.get(row.documentId)!;
+    if (row.costId !== null && (ownCostIds === null || ownCostIds.has(row.costId))) {
+      entry.costs.push({ id: row.costId, label: `${row.categoryName} – ${row.costDescription}` });
+    }
+    if (row.paymentId !== null && (scope.allUnits || row.paymentUnitId === scope.unitId)) {
+      entry.payments.push({
+        id: row.paymentId,
+        label: `${row.paymentUnitName} · ${formatDate(row.paymentDate)} · ${formatCents(row.paymentAmount ?? 0)}`,
+      });
+    }
+  }
+  return result;
+}
+
+function toDto(
+  row: DocumentRow,
+  year: number,
+  unitName: string | null,
+  links: { costs: DocumentLinkRef[]; payments: DocumentLinkRef[] },
+): DocumentDto {
   return {
     id: row.id,
     periodId: row.periodId,
-    costId: row.costId,
-    costLabel,
+    year,
+    type: row.type,
+    description: row.description,
+    unitId: row.unitId,
+    unitName,
     fileName: row.fileName,
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
@@ -38,83 +183,233 @@ function toDto(row: ReceiptRow, costLabel: string | null): ReceiptDto {
     supplier: row.supplier,
     invoiceNumber: row.invoiceNumber,
     amountCents: row.amountCents,
-    notes: row.notes,
     ocrStatus: row.ocrStatus,
     ocr: (row.ocrResult as OcrResult | null)?.fields ?? null,
     createdAt: row.createdAt.toISOString(),
+    costs: links.costs,
+    payments: links.payments,
   };
 }
 
-/**
- * Ohne scope:all_units sind nur Belege sichtbar, die an einer Kostenposition hängen,
- * an der die eigene TOP beteiligt ist. Nicht zugeordnete Belege sieht nur die Verwaltung.
- */
-function unitCondition(actor: SessionUser) {
+/** Dokumente im Sichtbereich des Benutzers, gefiltert und sortiert. */
+export async function listDocuments(
+  actor: SessionUser,
+  filter: DocumentFilter = {},
+): Promise<DocumentDto[]> {
+  authorize(actor, "document:read");
+  const db = getDb();
   const scope = getDataScope(actor);
-  if (scope.allUnits) return undefined;
-  // Benutzer ohne TOP sehen keine Belege.
-  if (scope.unitId === null) return sql`false`;
 
-  return exists(
-    getDb()
-      .select({ one: costUnits.costId })
-      .from(costUnits)
-      .where(and(eq(costUnits.costId, receipts.costId), eq(costUnits.unitId, scope.unitId))),
+  const search = filter.search?.trim();
+  let searchCondition: SQL | undefined;
+  if (search) {
+    // % und _ sind in LIKE Platzhalter – als normale Zeichen behandeln.
+    const pattern = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+    searchCondition = or(
+      ilike(documents.fileName, pattern),
+      ilike(documents.description, pattern),
+      ilike(documents.supplier, pattern),
+      ilike(documents.invoiceNumber, pattern),
+      // Über fremde Kostenpositionen darf eine einzelne TOP nicht suchen können.
+      scope.allUnits
+        ? exists(
+            db
+              .select({ one: sql`1` })
+              .from(documentLinks)
+              .innerJoin(costs, eq(costs.id, documentLinks.costId))
+              .where(and(eq(documentLinks.documentId, documents.id), ilike(costs.description, pattern))),
+          )
+        : undefined,
+    );
+  }
+
+  const order =
+    filter.sort === "oldest"
+      ? [asc(documents.createdAt), asc(documents.id)]
+      : filter.sort === "name"
+        ? [asc(sql`lower(${documents.fileName})`), desc(documents.id)]
+        : [desc(documents.createdAt), desc(documents.id)];
+
+  const rows = await db
+    .select({ document: documents, year: billingPeriods.year, unitName: units.name })
+    .from(documents)
+    .innerJoin(billingPeriods, eq(billingPeriods.id, documents.periodId))
+    .leftJoin(units, eq(units.id, documents.unitId))
+    .where(
+      and(
+        periodCondition(actor),
+        scopeCondition(actor),
+        filter.periodId ? eq(documents.periodId, filter.periodId) : undefined,
+        filter.type ? eq(documents.type, filter.type) : undefined,
+        filter.unitId && scope.allUnits ? relevantToUnit(filter.unitId) : undefined,
+        searchCondition,
+      ),
+    )
+    .orderBy(...order)
+    .limit(Math.min(filter.limit ?? 500, 500));
+
+  const links = await loadLinks(
+    actor,
+    rows.map((row) => row.document.id),
+  );
+  return rows.map(({ document, year, unitName }) =>
+    toDto(document, year, unitName, links.get(document.id)!),
   );
 }
 
-export async function listReceipts(actor: SessionUser, periodId: number): Promise<ReceiptDto[]> {
-  authorize(actor, "receipt:read");
-  await getVisiblePeriod(actor, periodId);
+/**
+ * Kurzreferenzen der Dokumente zu Kostenpositionen bzw. Einzahlungen.
+ * Der Aufrufer muss bereits geprüft haben, dass der Benutzer diese Einträge sehen darf –
+ * wer eine Kostenposition oder Einzahlung sieht, darf auch deren Dokumente sehen.
+ */
+export async function getDocumentRefs(
+  target: "cost" | "payment",
+  ids: number[],
+): Promise<Map<number, DocumentRef[]>> {
+  const result = new Map<number, DocumentRef[]>();
+  if (ids.length === 0) return result;
 
+  const column = target === "cost" ? documentLinks.costId : documentLinks.paymentId;
   const rows = await getDb()
     .select({
-      receipt: receipts,
-      costDescription: costs.description,
-      categoryName: costCategories.name,
+      targetId: column,
+      id: documents.id,
+      fileName: documents.fileName,
+      type: documents.type,
+      mimeType: documents.mimeType,
     })
-    .from(receipts)
-    .leftJoin(costs, eq(costs.id, receipts.costId))
-    .leftJoin(costCategories, eq(costCategories.id, costs.categoryId))
-    .where(and(eq(receipts.periodId, periodId), unitCondition(actor)))
-    .orderBy(desc(receipts.createdAt), desc(receipts.id));
+    .from(documentLinks)
+    .innerJoin(documents, eq(documents.id, documentLinks.documentId))
+    .where(inArray(column, ids))
+    .orderBy(asc(documents.id));
 
-  return rows.map(({ receipt, costDescription, categoryName }) =>
-    toDto(receipt, costDescription ? `${categoryName} – ${costDescription}` : null),
-  );
+  for (const { targetId, ...ref } of rows) {
+    if (targetId === null) continue;
+    result.set(targetId, [...(result.get(targetId) ?? []), ref]);
+  }
+  return result;
 }
 
-/** Lädt einen Beleg im Sichtbereich des Benutzers – sonst „nicht gefunden“. */
-async function getAccessibleReceipt(actor: SessionUser, receiptId: number): Promise<ReceiptRow> {
+export interface LinkOption {
+  id: number;
+  periodId: number;
+  label: string;
+}
+
+/**
+ * Alle Kostenpositionen und Einzahlungen als Auswahl für die Verknüpfung eines Dokuments.
+ * Nur für die Verwaltung – die Liste enthält Daten aller TOPs.
+ */
+export async function listLinkOptions(
+  actor: SessionUser,
+): Promise<{ costs: LinkOption[]; payments: LinkOption[] }> {
+  authorizeGlobalWrite(actor, "document:write");
+  const db = getDb();
+
+  const [costRows, paymentRows] = await Promise.all([
+    db
+      .select({
+        id: costs.id,
+        periodId: costs.periodId,
+        description: costs.description,
+        amountCents: costs.amountCents,
+        categoryName: costCategories.name,
+      })
+      .from(costs)
+      .innerJoin(costCategories, eq(costCategories.id, costs.categoryId))
+      .orderBy(asc(costCategories.sortOrder), asc(costs.description)),
+    db
+      .select({
+        id: payments.id,
+        periodId: payments.periodId,
+        paymentDate: payments.paymentDate,
+        amountCents: payments.amountCents,
+        unitName: units.name,
+      })
+      .from(payments)
+      .innerJoin(units, eq(units.id, payments.unitId))
+      .orderBy(desc(payments.paymentDate), asc(units.number)),
+  ]);
+
+  return {
+    costs: costRows.map((cost) => ({
+      id: cost.id,
+      periodId: cost.periodId,
+      label: `${cost.categoryName} – ${cost.description} (${formatCents(cost.amountCents)})`,
+    })),
+    payments: paymentRows.map((payment) => ({
+      id: payment.id,
+      periodId: payment.periodId,
+      label: `${formatDate(payment.paymentDate)} · ${payment.unitName} · ${formatCents(payment.amountCents)}`,
+    })),
+  };
+}
+
+/** Lädt ein Dokument im Sichtbereich des Benutzers – sonst „nicht gefunden“. */
+async function getAccessibleDocument(actor: SessionUser, documentId: number): Promise<DocumentRow> {
   const [row] = await getDb()
     .select()
-    .from(receipts)
-    .where(and(eq(receipts.id, receiptId), unitCondition(actor)))
+    .from(documents)
+    .where(and(eq(documents.id, documentId), scopeCondition(actor)))
     .limit(1);
-  if (!row) throw new NotFoundError("Der Beleg wurde nicht gefunden.");
+  if (!row) throw new NotFoundError("Das Dokument wurde nicht gefunden.");
+  // Wirft ebenfalls „nicht gefunden“, wenn das Abrechnungsjahr nicht freigegeben ist.
   await getVisiblePeriod(actor, row.periodId);
   return row;
 }
 
-/** Eine verknüpfte Kostenposition muss zum selben Abrechnungsjahr gehören. */
-async function assertCostInPeriod(costId: number | null, periodId: number): Promise<void> {
-  if (costId === null) return;
-  const [cost] = await getDb()
-    .select({ id: costs.id })
-    .from(costs)
-    .where(and(eq(costs.id, costId), eq(costs.periodId, periodId)))
-    .limit(1);
-  if (!cost) throw new DomainError("Die Kostenposition gehört nicht zu diesem Abrechnungsjahr.");
+// ---------------------------------------------------------------------------
+// Schreiben
+// ---------------------------------------------------------------------------
+
+/** Verknüpfungen müssen existieren und zum selben Abrechnungsjahr gehören wie das Dokument. */
+async function assertTargets(
+  tx: DbExecutor,
+  periodId: number,
+  meta: DocumentMetaInput,
+): Promise<void> {
+  const costIds = [...new Set(meta.costIds)];
+  if (costIds.length > 0) {
+    const found = await tx
+      .select({ id: costs.id })
+      .from(costs)
+      .where(and(inArray(costs.id, costIds), eq(costs.periodId, periodId)));
+    if (found.length !== costIds.length) {
+      throw new DomainError("Eine Kostenposition gehört nicht zu diesem Abrechnungsjahr.");
+    }
+  }
+  if (meta.paymentId !== null) {
+    const [payment] = await tx
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.id, meta.paymentId), eq(payments.periodId, periodId)))
+      .limit(1);
+    if (!payment) throw new DomainError("Die Einzahlung gehört nicht zu diesem Abrechnungsjahr.");
+  }
+  if (meta.unitId !== null) {
+    const [unit] = await tx.select({ id: units.id }).from(units).where(eq(units.id, meta.unitId)).limit(1);
+    if (!unit) throw new DomainError("Die TOP wurde nicht gefunden.");
+  }
 }
 
-function toColumns(meta: ReceiptMetaInput) {
+async function replaceLinks(tx: DbExecutor, documentId: number, meta: DocumentMetaInput) {
+  await tx.delete(documentLinks).where(eq(documentLinks.documentId, documentId));
+  const rows = [
+    ...[...new Set(meta.costIds)].map((costId) => ({ documentId, costId, paymentId: null })),
+    ...(meta.paymentId === null ? [] : [{ documentId, costId: null, paymentId: meta.paymentId }]),
+  ];
+  if (rows.length > 0) await tx.insert(documentLinks).values(rows);
+}
+
+function toColumns(meta: DocumentMetaInput) {
   return {
-    costId: meta.costId,
+    type: meta.type,
+    description: meta.description,
+    unitId: meta.unitId,
     documentDate: meta.documentDate,
     supplier: meta.supplier,
     invoiceNumber: meta.invoiceNumber,
     amountCents: meta.amount,
-    notes: meta.notes,
   };
 }
 
@@ -123,113 +418,134 @@ export interface UploadedFile {
   bytes: Buffer;
 }
 
-export async function uploadReceipt(
-  actor: SessionUser,
+/**
+ * Prüft vor dem Speichern alles, was einen Upload scheitern lassen kann: Größe, Typ
+ * (am Inhalt erkannt) und Dubletten im selben Abrechnungsjahr.
+ * Getrennt aufrufbar, damit z. B. die Kostenerfassung die Datei prüfen kann,
+ * bevor sie die Kostenposition anlegt.
+ */
+export async function checkUpload(
   periodId: number,
   file: UploadedFile,
-  meta: ReceiptMetaInput,
-): Promise<number> {
-  authorizeGlobalWrite(actor, "receipt:write");
-  const period = await getVisiblePeriod(actor, periodId);
-  await assertCostInPeriod(meta.costId, periodId);
-
+): Promise<{ mimeType: string; sha256: string }> {
   if (file.bytes.length === 0) throw new DomainError("Die Datei ist leer.");
   if (file.bytes.length > MAX_UPLOAD_BYTES) {
     throw new DomainError(`Die Datei ist größer als ${formatFileSize(MAX_UPLOAD_BYTES)}.`);
   }
   const mimeType = detectFileType(file.bytes);
   if (!mimeType) {
-    const allowed = Object.values(ALLOWED_FILE_TYPES).map((t) => t.label).join(", ");
+    const allowed = Object.values(ALLOWED_FILE_TYPES)
+      .map((type) => type.label)
+      .join(", ");
     throw new DomainError(`Dieses Dateiformat wird nicht unterstützt. Erlaubt sind: ${allowed}.`);
   }
-  if (!isStoragePersistent()) {
-    throw new DomainError(
-      "Für Uploads ist noch kein dauerhafter Speicher eingerichtet (Vercel Blob verbinden).",
-    );
-  }
 
-  const db = getDb();
   const sha256 = createHash("sha256").update(file.bytes).digest("hex");
-  const [duplicate] = await db
-    .select({ fileName: receipts.fileName })
-    .from(receipts)
-    .where(and(eq(receipts.periodId, periodId), eq(receipts.sha256, sha256)))
+  const [duplicate] = await getDb()
+    .select({ fileName: documents.fileName })
+    .from(documents)
+    .where(and(eq(documents.periodId, periodId), eq(documents.sha256, sha256)))
     .limit(1);
   if (duplicate) {
     throw new DomainError(`Diese Datei wurde bereits als „${duplicate.fileName}“ hochgeladen.`);
   }
+  return { mimeType, sha256 };
+}
 
-  const storage = getStorage(getDefaultStorageProvider());
-  const storageKey = `belege/${period.year}/${randomUUID()}.${ALLOWED_FILE_TYPES[mimeType].extension}`;
-  await storage.put(storageKey, file.bytes, mimeType);
+/**
+ * Speichert ein Dokument samt Datei. Metadaten, Dateiinhalt und Verknüpfungen entstehen
+ * in einer Transaktion – entweder ist alles da oder nichts.
+ */
+export async function uploadDocument(
+  actor: SessionUser,
+  periodId: number,
+  file: UploadedFile,
+  meta: DocumentMetaInput,
+): Promise<number> {
+  authorizeGlobalWrite(actor, "document:write");
+  await getVisiblePeriod(actor, periodId);
+  const { mimeType, sha256 } = await checkUpload(periodId, file);
 
-  try {
-    const [row] = await db
-      .insert(receipts)
+  return getDb().transaction(async (tx) => {
+    await assertTargets(tx, periodId, meta);
+    const [row] = await tx
+      .insert(documents)
       .values({
         ...toColumns(meta),
         periodId,
-        storageProvider: storage.provider,
-        storageKey,
         fileName: sanitizeFileName(file.name),
         mimeType,
         sizeBytes: file.bytes.length,
         sha256,
         uploadedBy: actor.id,
       })
-      .returning({ id: receipts.id });
+      .returning({ id: documents.id });
+    await tx.insert(documentFiles).values({ documentId: row.id, content: file.bytes });
+    await replaceLinks(tx, row.id, meta);
     return row.id;
-  } catch (error) {
-    // Ohne Datenbankeintrag wäre die Datei verwaist.
-    await storage.delete(storageKey).catch(() => undefined);
-    throw error;
-  }
+  });
 }
 
-export async function updateReceipt(
+export async function updateDocument(
   actor: SessionUser,
-  receiptId: number,
-  meta: ReceiptMetaInput,
+  documentId: number,
+  periodId: number,
+  meta: DocumentMetaInput,
 ): Promise<void> {
-  authorizeGlobalWrite(actor, "receipt:write");
-  const receipt = await getAccessibleReceipt(actor, receiptId);
-  await assertCostInPeriod(meta.costId, receipt.periodId);
-  await getDb().update(receipts).set(toColumns(meta)).where(eq(receipts.id, receiptId));
+  authorizeGlobalWrite(actor, "document:write");
+  await getAccessibleDocument(actor, documentId);
+  await getVisiblePeriod(actor, periodId);
+
+  await getDb().transaction(async (tx) => {
+    await assertTargets(tx, periodId, meta);
+    await tx
+      .update(documents)
+      .set({ ...toColumns(meta), periodId })
+      .where(eq(documents.id, documentId));
+    await replaceLinks(tx, documentId, meta);
+  });
 }
 
-export async function deleteReceipt(actor: SessionUser, receiptId: number): Promise<void> {
-  authorizeGlobalWrite(actor, "receipt:delete");
-  const receipt = await getAccessibleReceipt(actor, receiptId);
-
-  await getDb().delete(receipts).where(eq(receipts.id, receiptId));
-  try {
-    await getStorage(receipt.storageProvider).delete(receipt.storageKey);
-  } catch (error) {
-    // Der Beleg ist gelöscht; eine übrig gebliebene Datei ist nur noch Speicherplatz.
-    console.error(`Datei ${receipt.storageKey} konnte nicht gelöscht werden:`, error);
-  }
+export async function deleteDocument(actor: SessionUser, documentId: number): Promise<void> {
+  authorizeGlobalWrite(actor, "document:delete");
+  await getAccessibleDocument(actor, documentId);
+  // Dateiinhalt und Verknüpfungen hängen per ON DELETE CASCADE am Dokument.
+  await getDb().delete(documents).where(eq(documents.id, documentId));
 }
 
-export interface ReceiptFile {
-  file: StoredFile;
+// ---------------------------------------------------------------------------
+// Datei & OCR
+// ---------------------------------------------------------------------------
+
+export interface DocumentFile {
+  bytes: Buffer;
   fileName: string;
   mimeType: string;
-  sizeBytes: number;
 }
 
-/** Datei eines Belegs für Anzeige/Download – nach derselben Prüfung wie die Liste. */
-export async function getReceiptFile(actor: SessionUser, receiptId: number): Promise<ReceiptFile> {
-  authorize(actor, "receipt:read");
-  const receipt = await getAccessibleReceipt(actor, receiptId);
+/** Liest den Dateiinhalt – erst nachdem der Zugriff auf das Dokument geprüft wurde. */
+async function loadContent(documentId: number): Promise<Buffer> {
+  const [file] = await getDb()
+    .select({ content: documentFiles.content })
+    .from(documentFiles)
+    .where(eq(documentFiles.documentId, documentId))
+    .limit(1);
+  if (!file) throw new NotFoundError("Die Datei zum Dokument ist nicht mehr vorhanden.");
+  return file.content;
+}
 
-  const file = await getStorage(receipt.storageProvider).get(receipt.storageKey);
-  if (!file) throw new NotFoundError("Die Datei zum Beleg ist nicht mehr vorhanden.");
+/** Datei eines Dokuments für Vorschau/Download – nach derselben Prüfung wie die Liste. */
+export async function getDocumentFile(
+  actor: SessionUser,
+  documentId: number,
+): Promise<DocumentFile> {
+  authorize(actor, "document:read");
+  const document = await getAccessibleDocument(actor, documentId);
 
   return {
-    file,
-    fileName: receipt.fileName,
-    mimeType: receipt.mimeType,
-    sizeBytes: receipt.sizeBytes,
+    bytes: await loadContent(documentId),
+    fileName: document.fileName,
+    mimeType: document.mimeType,
   };
 }
 
@@ -241,44 +557,42 @@ export function isOcrAvailable(): boolean {
  * Liest Datum, Rechnungsnummer, Lieferant und Betrag per OCR aus. Bereits
  * ausgefüllte Metadaten bleiben unangetastet – OCR ergänzt nur leere Felder.
  */
-export async function runReceiptOcr(actor: SessionUser, receiptId: number): Promise<OcrFields> {
-  authorizeGlobalWrite(actor, "receipt:ocr");
-  const receipt = await getAccessibleReceipt(actor, receiptId);
+export async function runDocumentOcr(actor: SessionUser, documentId: number): Promise<OcrFields> {
+  authorizeGlobalWrite(actor, "document:ocr");
+  const document = await getAccessibleDocument(actor, documentId);
 
   const ocr = getOcrService();
   if (!ocr.isConfigured()) throw new DomainError("OCR ist nicht eingerichtet.");
-  if (!ocr.supports(receipt.mimeType)) {
+  if (!ocr.supports(document.mimeType)) {
     throw new DomainError("Dieses Dateiformat kann nicht per OCR ausgelesen werden.");
   }
 
-  const file = await getStorage(receipt.storageProvider).get(receipt.storageKey);
-  if (!file) throw new NotFoundError("Die Datei zum Beleg ist nicht mehr vorhanden.");
-  const bytes = Buffer.from(await new Response(file.body).arrayBuffer());
+  const bytes = await loadContent(documentId);
 
   const db = getDb();
-  await db.update(receipts).set({ ocrStatus: "pending" }).where(eq(receipts.id, receiptId));
+  await db.update(documents).set({ ocrStatus: "pending" }).where(eq(documents.id, documentId));
 
   try {
-    const result = await ocr.analyzeInvoice({ bytes, mimeType: receipt.mimeType });
+    const result = await ocr.analyzeInvoice({ bytes, mimeType: document.mimeType });
     const { fields } = result;
     await db
-      .update(receipts)
+      .update(documents)
       .set({
         ocrStatus: "done",
         ocrResult: result,
         ocrProcessedAt: new Date(),
-        documentDate: receipt.documentDate ?? fields.documentDate,
-        supplier: receipt.supplier ?? fields.supplier,
-        invoiceNumber: receipt.invoiceNumber ?? fields.invoiceNumber,
-        amountCents: receipt.amountCents ?? fields.amountCents,
+        documentDate: document.documentDate ?? fields.documentDate,
+        supplier: document.supplier ?? fields.supplier,
+        invoiceNumber: document.invoiceNumber ?? fields.invoiceNumber,
+        amountCents: document.amountCents ?? fields.amountCents,
       })
-      .where(eq(receipts.id, receiptId));
+      .where(eq(documents.id, documentId));
     return fields;
   } catch (error) {
     await db
-      .update(receipts)
+      .update(documents)
       .set({ ocrStatus: "failed", ocrProcessedAt: new Date() })
-      .where(eq(receipts.id, receiptId));
+      .where(eq(documents.id, documentId));
     if (error instanceof OcrError) throw new DomainError(error.message);
     throw error;
   }

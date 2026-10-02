@@ -1,21 +1,23 @@
-import { ReceiptText } from "lucide-react";
+import { ReceiptText, Scale, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { can, getDataScope } from "@/auth/rbac";
-import { BalanceBadge, balanceLabel } from "@/components/billing/balance-badge";
+import { BalanceBadge } from "@/components/billing/balance-badge";
 import { StatementMatrix } from "@/components/billing/statement-matrix";
-import { CoverageMeter } from "@/components/dashboard/coverage-meter";
+import { UnitStatement } from "@/components/billing/unit-statement";
+import { StatTile } from "@/components/dashboard/stat-tile";
 import { Alert } from "@/components/ui/alert";
 import { ButtonLink } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { Card, CardHeader } from "@/components/ui/card";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
-import { formatCents, formatDate, formatNumber } from "@/lib/format";
+import { summarizeStatement } from "@/lib/billing/allocation";
+import { formatCents } from "@/lib/format";
+import { listUnits } from "@/services/masterdata.service";
 import { loadPeriodPage } from "@/services/page-context";
+import { listPayments } from "@/services/payments.service";
 import { getStatement } from "@/services/statement.service";
-import type { StatementLine } from "@/types/billing";
 
 export async function generateMetadata({
   params,
@@ -23,21 +25,34 @@ export async function generateMetadata({
   return { title: `Abrechnung ${(await params).jahr}` };
 }
 
-export default async function StatementPage({ params }: PageProps<"/abrechnung/[jahr]">) {
+/**
+ * Abrechnungsübersicht eines Jahres: Gesamtsummen, Kostenverteilung und je TOP
+ * Kostenanteil, Einzahlungen, Differenz samt Kostenpositionen und Belegen.
+ */
+export default async function StatementPage({
+  params,
+  searchParams,
+}: PageProps<"/abrechnung/[jahr]">) {
   const { user, period } = await loadPeriodPage((await params).jahr);
   if (!can(user, "cost:read")) return <NoAccess />;
 
-  const statement = await getStatement(user, period.id);
   const scope = getDataScope(user);
+  const [statement, payments, units] = await Promise.all([
+    getStatement(user, period.id),
+    can(user, "payment:read") ? listPayments(user, { periodId: period.id }) : [],
+    listUnits(user),
+  ]);
+  const totals = summarizeStatement(statement, scope.allUnits);
   const draft = period.status === "draft";
+  const highlighted = Number((await searchParams).position);
 
-  if (statement.lines.length === 0) {
+  if (statement.lines.length === 0 && payments.length === 0) {
     return (
       <Card>
         <EmptyState
           icon={ReceiptText}
           title="Noch keine Kosten erfasst"
-          description={`Für ${period.year} gibt es noch keine Kostenpositionen.`}
+          description={`Für ${period.year} gibt es noch keine Kostenpositionen und Einzahlungen.`}
         >
           {scope.allUnits && can(user, "cost:write") && draft ? (
             <ButtonLink href={`/abrechnung/${period.year}/kosten`}>Kosten erfassen</ButtonLink>
@@ -47,26 +62,46 @@ export default async function StatementPage({ params }: PageProps<"/abrechnung/[
     );
   }
 
-  const warning =
-    statement.undistributedCents !== 0 ? (
-      <Alert tone="warning" title="Nicht alle Kosten sind verteilt">
-        {formatCents(statement.undistributedCents)} konnten keiner TOP zugeordnet werden, weil die
-        Summe der Schlüsselwerte 0 ist.
-        {scope.allUnits ? (
-          <>
-            {" "}
-            <Link href={`/abrechnung/${period.year}/schluessel`} className="font-medium underline">
-              Umlageschlüssel prüfen
-            </Link>
-          </>
-        ) : null}
-      </Alert>
-    ) : null;
+  return (
+    <div className="space-y-4">
+      {statement.undistributedCents !== 0 ? (
+        <Alert tone="warning" title="Nicht alle Kosten sind verteilt">
+          {formatCents(statement.undistributedCents)} konnten keiner TOP zugeordnet werden, weil die
+          Summe der Schlüsselwerte 0 ist.
+          {scope.allUnits ? (
+            <>
+              {" "}
+              <Link href={`/abrechnung/${period.year}/schluessel`} className="font-medium underline">
+                Umlageschlüssel prüfen
+              </Link>
+            </>
+          ) : null}
+        </Alert>
+      ) : null}
 
-  if (scope.allUnits) {
-    return (
-      <div className="space-y-4">
-        {warning}
+      <section aria-label="Gesamt" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatTile
+          label={scope.allUnits ? "Gesamtkosten" : "Mein Kostenanteil"}
+          value={formatCents(totals.costCents)}
+          icon={ReceiptText}
+        >
+          {statement.lines.length} {statement.lines.length === 1 ? "Position" : "Positionen"}
+        </StatTile>
+        <StatTile
+          label={scope.allUnits ? "Gesamtzahlungen" : "Meine Einzahlungen"}
+          value={formatCents(totals.paymentCents)}
+          icon={Wallet}
+        >
+          {totals.pendingPaymentCents !== 0
+            ? `zusätzlich ${formatCents(totals.pendingPaymentCents)} offen erwartet`
+            : "eingegangene Zahlungen"}
+        </StatTile>
+        <StatTile label="Differenz" value={formatCents(Math.abs(totals.balanceCents))} icon={Scale}>
+          <BalanceBadge cents={totals.balanceCents} />
+        </StatTile>
+      </section>
+
+      {scope.allUnits && statement.lines.length > 0 ? (
         <Card>
           <CardHeader
             title="Kostenverteilung"
@@ -80,116 +115,36 @@ export default async function StatementPage({ params }: PageProps<"/abrechnung/[
             <StatementMatrix statement={statement} />
           </div>
         </Card>
-      </div>
-    );
-  }
-
-  // Sicht einer einzelnen TOP: nur eigene Positionen und der eigene Anteil.
-  const balance = statement.balances[0];
-  const ownShare = (line: StatementLine) => line.shares[0];
-
-  const columns: Column<StatementLine>[] = [
-    {
-      key: "position",
-      header: "Position",
-      mobile: false,
-      cell: (line) => (
-        <>
-          <span className="font-medium">{line.description}</span>
-          <span className="block text-xs text-muted">{line.categoryName}</span>
-        </>
-      ),
-    },
-    { key: "date", header: "Datum", cell: (line) => formatDate(line.costDate) },
-    {
-      key: "amount",
-      header: "Gesamtbetrag",
-      align: "right",
-      cell: (line) => formatCents(line.amountCents),
-    },
-    {
-      key: "key",
-      header: "Umlageschlüssel",
-      cell: (line) => (
-        <>
-          {line.keyName}
-          {line.distributable && line.keyUnitLabel ? (
-            <span className="block text-xs text-muted">
-              {formatNumber(ownShare(line).weight)} von {formatNumber(line.totalWeight)}{" "}
-              {line.keyUnitLabel}
-            </span>
-          ) : null}
-        </>
-      ),
-    },
-    {
-      key: "share",
-      header: "Mein Anteil",
-      align: "right",
-      mobile: false,
-      cell: (line) => <span className="font-medium">{formatCents(ownShare(line).cents)}</span>,
-    },
-  ];
-
-  return (
-    <div className="space-y-4">
-      {warning}
-      {balance ? (
-        <Card>
-          <CardContent className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <p className="text-sm text-muted">Mein Kostenanteil</p>
-              <p className="mt-1 text-xl font-semibold">{formatCents(balance.costCents)}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted">Meine Einzahlungen</p>
-              <p className="mt-1 text-xl font-semibold">{formatCents(balance.paymentCents)}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted">{balanceLabel(balance.balanceCents)}</p>
-              <p className="mt-1 flex flex-wrap items-center gap-2 text-xl font-semibold">
-                {formatCents(Math.abs(balance.balanceCents))}
-                <BalanceBadge cents={balance.balanceCents} />
-              </p>
-            </div>
-            <div className="sm:col-span-3">
-              <CoverageMeter paymentCents={balance.paymentCents} costCents={balance.costCents} />
-            </div>
-          </CardContent>
-        </Card>
       ) : null}
 
-      <Card>
-        <CardHeader
-          title={`Kostenpositionen ${user.unitName ?? ""}`.trim()}
-          description="Alle Kosten, an denen deine TOP beteiligt ist, mit deinem Anteil."
-        />
-        <div className="pt-3">
-          <DataTable
-            caption="Kostenpositionen mit eigenem Anteil"
-            rows={statement.lines}
-            columns={columns}
-            rowKey={(line) => line.costId}
-            mobileTitle={(line) => (
-              <>
-                {line.description}
-                <span className="block text-xs font-normal text-muted">{line.categoryName}</span>
-              </>
-            )}
-            mobileValue={(line) => formatCents(ownShare(line).cents)}
-            footer={
-              <tr className="font-semibold">
-                <td colSpan={4} className="px-3 py-2.5 pl-5">
-                  Summe
-                </td>
-                <td className="px-3 py-2.5 pr-5 text-right tabular-nums">
-                  {formatCents(balance?.costCents ?? 0)}
-                </td>
-              </tr>
-            }
-          />
-        </div>
-      </Card>
+      <section className="space-y-3">
+        {scope.allUnits ? <h2 className="pt-2 text-base font-semibold">Abrechnung je TOP</h2> : null}
+        {statement.balances.length === 0 ? (
+          <Card>
+            <p className="p-5 text-sm text-muted">Deinem Konto ist keine TOP zugeordnet.</p>
+          </Card>
+        ) : (
+          statement.balances.map((balance) => (
+            <UnitStatement
+              key={balance.unitId}
+              year={period.year}
+              balance={balance}
+              lines={statement.lines.filter((line) =>
+                line.shares.some((share) => share.unitId === balance.unitId),
+              )}
+              payments={payments.filter((payment) => payment.unitId === balance.unitId)}
+              documentsHref={
+                scope.allUnits
+                  ? `/dokumente?jahr=${period.year}&top=${units.find((u) => u.id === balance.unitId)?.number ?? ""}`
+                  : undefined
+              }
+              // Die eigene Abrechnung ist direkt aufgeklappt; die Verwaltung klappt je TOP auf.
+              defaultOpen={!scope.allUnits}
+              highlightCostId={highlighted}
+            />
+          ))
+        )}
+      </section>
     </div>
   );
 }

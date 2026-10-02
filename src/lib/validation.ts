@@ -143,6 +143,8 @@ export const periodSchema = z.object({
 });
 
 export const costSchema = z.object({
+  /** Abrechnungsjahr der Kostenposition. */
+  periodId: id,
   categoryId: id,
   description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
   amount: amountCents,
@@ -169,19 +171,28 @@ export const paymentSchema = z.object({
   amount: amountCents,
   purpose: optionalText(200),
   note: optionalText(1000),
+  status: z.enum(["received", "pending", "cancelled"]).default("received"),
 });
 
 // ---------------------------------------------------------------------------
-// Belege
+// Dokumente
 // ---------------------------------------------------------------------------
 
-export const receiptMetaSchema = z.object({
-  costId: optionalId,
+export const documentTypeSchema = z.enum(["invoice", "payment_proof", "contract", "other"]);
+
+export const documentMetaSchema = z.object({
+  type: documentTypeSchema.default("invoice"),
+  description: optionalText(1000),
+  /** Optional: TOP, zu der das Dokument gehört. */
+  unitId: optionalId,
+  /** Verknüpfte Kostenpositionen (keine, eine oder mehrere). */
+  costIds: z.array(id).max(100).default([]),
+  /** Verknüpfte Einzahlung, z. B. bei einem Zahlungsnachweis. */
+  paymentId: optionalId,
   documentDate: optionalIsoDate,
   supplier: optionalText(200),
   invoiceNumber: optionalText(100),
   amount: optionalAmountCents,
-  notes: optionalText(1000),
 });
 
 // ---------------------------------------------------------------------------
@@ -237,7 +248,7 @@ export const rolePermissionsSchema = z.object({
 
 export type CostInput = z.infer<typeof costSchema>;
 export type PaymentInput = z.infer<typeof paymentSchema>;
-export type ReceiptMetaInput = z.infer<typeof receiptMetaSchema>;
+export type DocumentMetaInput = z.infer<typeof documentMetaSchema>;
 export type PeriodInput = z.infer<typeof periodSchema>;
 export type UnitInput = z.infer<typeof unitSchema>;
 export type CategoryInput = z.infer<typeof categorySchema>;

@@ -19,10 +19,10 @@ export const PERMISSIONS = {
   "payment:write": "Einzahlungen erfassen und bearbeiten",
   "payment:delete": "Einzahlungen löschen",
 
-  "receipt:read": "Belege ansehen",
-  "receipt:write": "Belege hochladen und bearbeiten",
-  "receipt:delete": "Belege löschen",
-  "receipt:ocr": "Belege per OCR auslesen",
+  "document:read": "Dokumente ansehen",
+  "document:write": "Dokumente hochladen und bearbeiten",
+  "document:delete": "Dokumente löschen",
+  "document:ocr": "Dokumente per OCR auslesen",
 
   "masterdata:write": "Stammdaten pflegen (TOPs, Kostenarten, Umlageschlüssel)",
   "user:manage": "Benutzer und Rollen verwalten",
@@ -61,6 +61,6 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
     key: ROLE_KEYS.USER,
     name: "Benutzer",
     description: "Lesezugriff auf freigegebene Daten der eigenen TOP.",
-    permissions: ["dashboard:view", "period:read", "cost:read", "payment:read", "receipt:read"],
+    permissions: ["dashboard:view", "period:read", "cost:read", "payment:read", "document:read"],
   },
 ];

@@ -1,6 +1,8 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
+  check,
+  customType,
   date,
   index,
   integer,
@@ -14,6 +16,11 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+
+/** Binärdaten (PostgreSQL bytea) – der Treiber liefert und erwartet einen Buffer. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
 
 const createdAt = timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp("updated_at", { withTimezone: true })
@@ -218,48 +225,14 @@ export const costUnits = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Belege
-// ---------------------------------------------------------------------------
-
-export const ocrStatus = pgEnum("ocr_status", ["none", "pending", "done", "failed"]);
-
-export const receipts = pgTable(
-  "receipts",
-  {
-    id: serial("id").primaryKey(),
-    periodId: integer("period_id")
-      .notNull()
-      .references(() => billingPeriods.id, { onDelete: "restrict" }),
-    costId: integer("cost_id").references(() => costs.id, { onDelete: "set null" }),
-    // Die Datei selbst liegt im Storage – hier nur der Verweis darauf.
-    storageProvider: text("storage_provider").notNull(),
-    storageKey: text("storage_key").notNull(),
-    fileName: text("file_name").notNull(),
-    mimeType: text("mime_type").notNull(),
-    sizeBytes: integer("size_bytes").notNull(),
-    sha256: text("sha256").notNull(),
-    documentDate: date("document_date", { mode: "string" }),
-    supplier: text("supplier"),
-    invoiceNumber: text("invoice_number"),
-    amountCents: integer("amount_cents"),
-    notes: text("notes"),
-    ocrStatus: ocrStatus("ocr_status").notNull().default("none"),
-    ocrResult: jsonb("ocr_result"),
-    ocrProcessedAt: timestamp("ocr_processed_at", { withTimezone: true }),
-    uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
-    createdAt,
-    updatedAt,
-  },
-  (t) => [
-    index("receipts_period_idx").on(t.periodId),
-    index("receipts_cost_idx").on(t.costId),
-    uniqueIndex("receipts_storage_key_idx").on(t.storageProvider, t.storageKey),
-  ],
-);
-
-// ---------------------------------------------------------------------------
 // Einzahlungen
 // ---------------------------------------------------------------------------
+
+/**
+ * received = eingegangen (zählt in der Abrechnung), pending = erwartet/offen,
+ * cancelled = storniert bzw. zurückgebucht. Nur „received“ mindert den offenen Betrag.
+ */
+export const paymentStatus = pgEnum("payment_status", ["received", "pending", "cancelled"]);
 
 export const payments = pgTable(
   "payments",
@@ -276,11 +249,96 @@ export const payments = pgTable(
     amountCents: integer("amount_cents").notNull(),
     purpose: text("purpose"),
     note: text("note"),
+    status: paymentStatus("status").notNull().default("received"),
     createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt,
     updatedAt,
   },
   (t) => [index("payments_period_unit_idx").on(t.periodId, t.unitId)],
+);
+
+// ---------------------------------------------------------------------------
+// Dokumente
+// ---------------------------------------------------------------------------
+
+export const documentType = pgEnum("document_type", [
+  "invoice",
+  "payment_proof",
+  "contract",
+  "other",
+]);
+
+export const ocrStatus = pgEnum("ocr_status", ["none", "pending", "done", "failed"]);
+
+export const documents = pgTable(
+  "documents",
+  {
+    id: serial("id").primaryKey(),
+    periodId: integer("period_id")
+      .notNull()
+      .references(() => billingPeriods.id, { onDelete: "restrict" }),
+    type: documentType("type").notNull().default("invoice"),
+    description: text("description"),
+    /** Optional: Dokument gehört zu genau einer TOP (z. B. ein Mietvertrag). */
+    unitId: integer("unit_id").references(() => units.id, { onDelete: "set null" }),
+    // Nur Metadaten – der Dateiinhalt liegt in document_files.
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    documentDate: date("document_date", { mode: "string" }),
+    supplier: text("supplier"),
+    invoiceNumber: text("invoice_number"),
+    amountCents: integer("amount_cents"),
+    ocrStatus: ocrStatus("ocr_status").notNull().default("none"),
+    ocrResult: jsonb("ocr_result"),
+    ocrProcessedAt: timestamp("ocr_processed_at", { withTimezone: true }),
+    uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+    /** Upload-Datum. */
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    index("documents_period_idx").on(t.periodId),
+    index("documents_unit_idx").on(t.unitId),
+  ],
+);
+
+/**
+ * Dateiinhalt eines Dokuments. Bewusst eine eigene Tabelle: Listen und Auswertungen
+ * lesen nur `documents` und ziehen so nie die Dateien mit; geladen wird der Inhalt
+ * ausschließlich für Vorschau, Download und OCR.
+ */
+export const documentFiles = pgTable("document_files", {
+  documentId: integer("document_id")
+    .primaryKey()
+    .references(() => documents.id, { onDelete: "cascade" }),
+  content: bytea("content").notNull(),
+});
+
+/**
+ * Verknüpfung eines Dokuments mit einer Kostenposition oder einer Einzahlung.
+ * Ein Dokument kann mehrere Verknüpfungen haben (z. B. eine Vorschreibung, die
+ * auf mehrere Kostenpositionen aufgeteilt wurde).
+ */
+export const documentLinks = pgTable(
+  "document_links",
+  {
+    id: serial("id").primaryKey(),
+    documentId: integer("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    costId: integer("cost_id").references(() => costs.id, { onDelete: "cascade" }),
+    paymentId: integer("payment_id").references(() => payments.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    uniqueIndex("document_links_document_cost_idx").on(t.documentId, t.costId),
+    uniqueIndex("document_links_document_payment_idx").on(t.documentId, t.paymentId),
+    index("document_links_cost_idx").on(t.costId),
+    index("document_links_payment_idx").on(t.paymentId),
+    // Genau ein Ziel je Verknüpfung.
+    check("document_links_one_target", sql`num_nonnulls(${t.costId}, ${t.paymentId}) = 1`),
+  ],
 );
 
 // ---------------------------------------------------------------------------
@@ -309,7 +367,7 @@ export const costsRelations = relations(costs, ({ one, many }) => ({
     references: [allocationKeys.id],
   }),
   units: many(costUnits),
-  receipts: many(receipts),
+  documentLinks: many(documentLinks),
 }));
 
 export const costUnitsRelations = relations(costUnits, ({ one }) => ({
@@ -317,12 +375,19 @@ export const costUnitsRelations = relations(costUnits, ({ one }) => ({
   unit: one(units, { fields: [costUnits.unitId], references: [units.id] }),
 }));
 
-export const receiptsRelations = relations(receipts, ({ one }) => ({
-  period: one(billingPeriods, { fields: [receipts.periodId], references: [billingPeriods.id] }),
-  cost: one(costs, { fields: [receipts.costId], references: [costs.id] }),
-}));
-
 export const paymentsRelations = relations(payments, ({ one }) => ({
   period: one(billingPeriods, { fields: [payments.periodId], references: [billingPeriods.id] }),
   unit: one(units, { fields: [payments.unitId], references: [units.id] }),
+}));
+
+export const documentsRelations = relations(documents, ({ one, many }) => ({
+  period: one(billingPeriods, { fields: [documents.periodId], references: [billingPeriods.id] }),
+  unit: one(units, { fields: [documents.unitId], references: [units.id] }),
+  links: many(documentLinks),
+}));
+
+export const documentLinksRelations = relations(documentLinks, ({ one }) => ({
+  document: one(documents, { fields: [documentLinks.documentId], references: [documents.id] }),
+  cost: one(costs, { fields: [documentLinks.costId], references: [costs.id] }),
+  payment: one(payments, { fields: [documentLinks.paymentId], references: [payments.id] }),
 }));

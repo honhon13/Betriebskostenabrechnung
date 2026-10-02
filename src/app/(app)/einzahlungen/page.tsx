@@ -1,4 +1,4 @@
-import { Pencil, Plus, Trash2, Wallet } from "lucide-react";
+import { CircleCheck, CircleX, Clock, Pencil, Plus, Trash2, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 
 import {
@@ -8,29 +8,60 @@ import {
 } from "@/app/actions/payments";
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
+import { BalanceBadge } from "@/components/billing/balance-badge";
+import { DocumentChips } from "@/components/documents/document-preview";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { NavSelect } from "@/components/layout/year-select";
 import { PaymentFields } from "@/components/payments/payment-fields";
-import { Card, CardHeader } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { formatCents, formatDate, todayIso } from "@/lib/format";
+import { PAYMENT_STATUS_LABELS, PAYMENT_STATUSES } from "@/lib/labels";
 import { listUnits } from "@/services/masterdata.service";
 import { listPayments } from "@/services/payments.service";
 import { listPeriods, pickDefaultPeriod } from "@/services/periods.service";
-import type { PaymentDto } from "@/types/billing";
+import { getStatement } from "@/services/statement.service";
+import type { PaymentDto, PaymentStatus } from "@/types/billing";
 
 export const metadata: Metadata = { title: "Einzahlungen" };
 
 const ALL = "alle";
 
+/** Schlüssel für den Status-Filter in der URL (?status=offen). */
+const STATUS_PARAM: Record<PaymentStatus, string> = {
+  received: "eingegangen",
+  pending: "offen",
+  cancelled: "storniert",
+};
+
+function StatusBadge({ status }: { status: PaymentStatus }) {
+  const label = PAYMENT_STATUS_LABELS[status];
+  if (status === "received") {
+    return (
+      <Badge tone="success" icon={<CircleCheck aria-hidden />}>
+        {label}
+      </Badge>
+    );
+  }
+  if (status === "pending") {
+    return (
+      <Badge tone="warning" icon={<Clock aria-hidden />}>
+        {label}
+      </Badge>
+    );
+  }
+  return <Badge icon={<CircleX aria-hidden />}>{label}</Badge>;
+}
+
 export default async function PaymentsPage({ searchParams }: PageProps<"/einzahlungen">) {
   const user = await requireUser();
   if (!can(user, "payment:read") || !can(user, "period:read")) return <NoAccess />;
 
-  const { jahr, top } = await searchParams;
+  const { jahr, top, status: statusParam } = await searchParams;
   const [periods, units] = await Promise.all([listPeriods(user), listUnits(user)]);
   const scope = getDataScope(user);
 
@@ -39,25 +70,54 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
     jahr === ALL ? null : (periods.find((p) => p.year === Number(jahr)) ?? pickDefaultPeriod(periods));
   const unit = scope.allUnits ? units.find((u) => String(u.number) === top) : undefined;
 
-  const payments = await listPayments(user, { periodId: period?.id, unitId: unit?.id });
-  const total = payments.reduce((acc, payment) => acc + payment.amountCents, 0);
+  const status = PAYMENT_STATUSES.find((s) => STATUS_PARAM[s] === statusParam);
+
+  const [payments, statement] = await Promise.all([
+    listPayments(user, { periodId: period?.id, unitId: unit?.id, status }),
+    // Guthaben/Nachzahlung je TOP gibt es nur bezogen auf ein Abrechnungsjahr.
+    period && can(user, "cost:read") ? getStatement(user, period.id) : null,
+  ]);
+  // Summe der eingegangenen Zahlungen – offene und stornierte zählen nicht mit.
+  const total = payments
+    .filter((payment) => payment.status === "received")
+    .reduce((acc, payment) => acc + payment.amountCents, 0);
+  const balances = (statement?.balances ?? []).filter((b) => !unit || b.unitId === unit.id);
 
   const canWrite = can(user, "payment:write") && periods.length > 0 && units.length > 0;
   const canDelete = can(user, "payment:delete");
+  const allowUpload = scope.allUnits && can(user, "document:write");
   const yearValue = period ? String(period.year) : ALL;
   const topValue = unit ? String(unit.number) : ALL;
+  const statusValue = status ? STATUS_PARAM[status] : ALL;
+  // Alle Filter bleiben beim Wechsel eines einzelnen erhalten.
+  const href = (overrides: { jahr?: string; top?: string; status?: string }) => {
+    const query = new URLSearchParams({
+      jahr: overrides.jahr ?? yearValue,
+      top: overrides.top ?? topValue,
+      status: overrides.status ?? statusValue,
+    });
+    return `/einzahlungen?${query.toString().replace(/%7B/g, "{").replace(/%7D/g, "}")}`;
+  };
 
   const columns: Column<PaymentDto>[] = [
     { key: "date", header: "Datum", cell: (p) => formatDate(p.paymentDate), className: "whitespace-nowrap" },
     { key: "unit", header: "TOP", mobile: false, cell: (p) => <span className="font-medium">{p.unitName}</span> },
     { key: "year", header: "Abrechnungsjahr", cell: (p) => p.year },
-    { key: "purpose", header: "Verwendungszweck", cell: (p) => p.purpose ?? <span className="text-subtle">–</span> },
     {
-      key: "note",
-      header: "Notiz",
+      key: "purpose",
+      header: "Beschreibung",
       cell: (p) =>
-        p.note ? <span className="break-words">{p.note}</span> : <span className="text-subtle">–</span>,
+        p.purpose || p.note ? (
+          <>
+            {p.purpose}
+            {p.note ? <span className="block text-xs break-words text-muted">{p.note}</span> : null}
+          </>
+        ) : (
+          <span className="text-subtle">–</span>
+        ),
     },
+    { key: "status", header: "Status", cell: (p) => <StatusBadge status={p.status} /> },
+    { key: "documents", header: "Nachweis", cell: (p) => <DocumentChips documents={p.documents} /> },
     {
       key: "amount",
       header: "Betrag",
@@ -85,7 +145,7 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
               ...periods.map((p) => ({ value: String(p.year), label: String(p.year) })),
               { value: ALL, label: "Alle Jahre" },
             ]}
-            hrefPattern={`/einzahlungen?jahr={value}${unit ? `&top=${unit.number}` : ""}`}
+            hrefPattern={href({ jahr: "{value}" })}
           />
         ) : null}
         {scope.allUnits ? (
@@ -96,9 +156,18 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
               { value: ALL, label: "Alle TOPs" },
               ...units.map((u) => ({ value: String(u.number), label: u.name })),
             ]}
-            hrefPattern={`/einzahlungen?jahr=${yearValue}&top={value}`}
+            hrefPattern={href({ top: "{value}" })}
           />
         ) : null}
+        <NavSelect
+          label="Zahlungsstatus"
+          value={statusValue}
+          options={[
+            { value: ALL, label: "Alle Status" },
+            ...PAYMENT_STATUSES.map((s) => ({ value: STATUS_PARAM[s], label: PAYMENT_STATUS_LABELS[s] })),
+          ]}
+          hrefPattern={href({ status: "{value}" })}
+        />
         {canWrite ? (
           <FormDialog
             trigger={
@@ -119,15 +188,55 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
                 unitId: unit?.id,
                 date: todayIso(),
               }}
+              allowUpload={allowUpload}
             />
           </FormDialog>
         ) : null}
       </PageHeader>
 
+      {period && balances.length > 0 ? (
+        <Card>
+          <CardHeader
+            title={`Stand ${period.year}`}
+            description="Einzahlungen minus Kostenanteil = Guthaben bzw. Nachzahlung."
+          />
+          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {balances.map((balance) => (
+              <div key={balance.unitId} className="rounded-lg border border-border p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">{balance.unitName}</p>
+                  <BalanceBadge cents={balance.balanceCents} />
+                </div>
+                <dl className="mt-2 space-y-1 text-sm">
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-muted">Einzahlungen</dt>
+                    <dd className="tabular-nums">{formatCents(balance.paymentCents)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-muted">Kostenanteil</dt>
+                    <dd className="tabular-nums">− {formatCents(balance.costCents)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-2 border-t border-border pt-1 font-semibold">
+                    <dt>{balance.balanceCents < 0 ? "Nachzahlung" : "Guthaben"}</dt>
+                    <dd className="tabular-nums">{formatCents(Math.abs(balance.balanceCents))}</dd>
+                  </div>
+                  {balance.pendingPaymentCents !== 0 ? (
+                    <div className="flex justify-between gap-2 text-xs text-muted">
+                      <dt>davon noch offen erwartet</dt>
+                      <dd className="tabular-nums">{formatCents(balance.pendingPaymentCents)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader
           title={period ? `Einzahlungen ${period.year}` : "Einzahlungen aller Jahre"}
-          description={`${payments.length} ${payments.length === 1 ? "Einzahlung" : "Einzahlungen"} · ${formatCents(total)}`}
+          description={`${payments.length} ${payments.length === 1 ? "Einzahlung" : "Einzahlungen"} · ${formatCents(total)} eingegangen`}
         />
         {payments.length === 0 ? (
           <EmptyState
@@ -161,7 +270,12 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
                             title="Einzahlung bearbeiten"
                             action={updatePaymentAction.bind(null, payment.id)}
                           >
-                            <PaymentFields periods={periods} units={units} payment={payment} />
+                            <PaymentFields
+                              periods={periods}
+                              units={units}
+                              payment={payment}
+                              allowUpload={allowUpload}
+                            />
                           </FormDialog>
                         ) : null}
                         {canDelete ? (
@@ -186,8 +300,8 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
               }
               footer={
                 <tr className="font-semibold">
-                  <td colSpan={5} className="px-3 py-2.5 pl-5">
-                    Summe
+                  <td colSpan={6} className="px-3 py-2.5 pl-5">
+                    Summe eingegangen
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{formatCents(total)}</td>
                   {canWrite || canDelete ? <td /> : null}

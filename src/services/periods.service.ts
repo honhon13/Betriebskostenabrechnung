@@ -5,7 +5,7 @@ import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { authorize, authorizeGlobalWrite, getDataScope } from "@/auth/rbac";
 import { seedAllocationValues } from "@/db/allocation-defaults";
 import { getDb } from "@/db/client";
-import { billingPeriods, costs, payments, receipts } from "@/db/schema";
+import { billingPeriods, costs, documents, payments } from "@/db/schema";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { PeriodInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
@@ -135,17 +135,17 @@ export async function deletePeriod(actor: SessionUser, periodId: number): Promis
   const period = await getVisiblePeriod(actor, periodId);
 
   const db = getDb();
-  const [[costCount], [paymentCount], [receiptCount]] = await Promise.all([
+  const [[costCount], [paymentCount], [documentCount]] = await Promise.all([
     db.select({ n: count() }).from(costs).where(eq(costs.periodId, periodId)),
     db.select({ n: count() }).from(payments).where(eq(payments.periodId, periodId)),
-    db.select({ n: count() }).from(receipts).where(eq(receipts.periodId, periodId)),
+    db.select({ n: count() }).from(documents).where(eq(documents.periodId, periodId)),
   ]);
 
   // Ein ganzes Jahr samt Inhalt soll nicht mit einem Klick verschwinden können.
-  if (costCount.n + paymentCount.n + receiptCount.n > 0) {
+  if (costCount.n + paymentCount.n + documentCount.n > 0) {
     throw new DomainError(
       `Das Abrechnungsjahr ${period.year} enthält noch ${costCount.n} Kosten, ` +
-        `${paymentCount.n} Einzahlungen und ${receiptCount.n} Belege. Bitte zuerst diese Einträge löschen.`,
+        `${paymentCount.n} Einzahlungen und ${documentCount.n} Dokumente. Bitte zuerst diese Einträge löschen.`,
     );
   }
 

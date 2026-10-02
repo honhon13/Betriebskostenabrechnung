@@ -35,6 +35,7 @@
 
   /* Diagramme: eine Reihe = ein Farbton, die Spur ist ein hellerer Schritt derselben Rampe. */
   --chart-series: #2a78d6;
+  --chart-series-2: #eb6834;
   --chart-track: #cde2fb;
 }
 
@@ -67,6 +68,7 @@
     --danger-soft: #3a1717;
 
     --chart-series: #3987e5;
+    --chart-series-2: #d95926;
     --chart-track: #184f95;
   }
 }
@@ -93,6 +95,7 @@
   --color-danger-hover: var(--danger-hover);
   --color-danger-soft: var(--danger-soft);
   --color-chart-series: var(--chart-series);
+  --color-chart-series-2: var(--chart-series-2);
   --color-chart-track: var(--chart-track);
 
   --font-sans: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;

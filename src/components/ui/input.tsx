@@ -29,3 +29,9 @@ export function Checkbox({ className, ...props }: ComponentProps<"input">) {
     />
   );
 }
+
+/** Dateifeld im Stil der übrigen Eingaben. */
+export const fileInputClass =
+  "block w-full cursor-pointer rounded-lg border border-dashed border-border-strong bg-surface text-sm text-muted " +
+  "file:mr-3 file:h-10 file:cursor-pointer file:border-0 file:bg-surface-muted file:px-4 file:text-sm file:font-medium " +
+  "file:text-foreground hover:border-primary focus-visible:outline-2 focus-visible:outline-ring";

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { asc, count, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 
 import { authorize, getDataScope } from "@/auth/rbac";
 import { getDb } from "@/db/client";
@@ -11,13 +11,13 @@ import {
   costs,
   costUnits,
   payments,
-  receipts,
   units,
 } from "@/db/schema";
 import { buildStatement, restrictStatementToUnit } from "@/lib/billing/allocation";
 import type { SessionUser } from "@/types/auth";
 import type { Statement } from "@/types/billing";
 
+import { getDocumentRefs } from "./documents.service";
 import { getVisiblePeriod } from "./periods.service";
 
 /**
@@ -39,6 +39,7 @@ export async function getStatement(actor: SessionUser, periodId: number): Promis
         categoryName: costCategories.name,
         categoryOrder: costCategories.sortOrder,
         costDate: costs.costDate,
+        createdAt: costs.createdAt,
         amountCents: costs.amountCents,
         keyId: allocationKeys.id,
         keyName: allocationKeys.name,
@@ -52,31 +53,30 @@ export async function getStatement(actor: SessionUser, periodId: number): Promis
       .orderBy(asc(costCategories.sortOrder), asc(costCategories.name), asc(costs.costDate), asc(costs.id)),
     db.select().from(allocationValues).where(eq(allocationValues.periodId, periodId)),
     db
-      .select({ unitId: payments.unitId, amountCents: payments.amountCents })
+      .select({
+        unitId: payments.unitId,
+        amountCents: payments.amountCents,
+        status: payments.status,
+      })
       .from(payments)
       .where(eq(payments.periodId, periodId)),
   ]);
 
   const costIds = costRows.map((row) => row.id);
-  const [costUnitRows, receiptRows] =
+  const [costUnitRows, documentRefs] = await Promise.all([
     costIds.length === 0
-      ? [[], []]
-      : await Promise.all([
-          db.select().from(costUnits).where(inArray(costUnits.costId, costIds)),
-          db
-            .select({ costId: receipts.costId, n: count() })
-            .from(receipts)
-            .where(inArray(receipts.costId, costIds))
-            .groupBy(receipts.costId),
-        ]);
-  const receiptCount = new Map(receiptRows.map((row) => [row.costId, row.n]));
+      ? []
+      : db.select().from(costUnits).where(inArray(costUnits.costId, costIds)),
+    getDocumentRefs("cost", costIds),
+  ]);
 
   const statement = buildStatement({
     units: unitRows,
     costs: costRows.map((cost) => ({
       ...cost,
+      createdAt: cost.createdAt.toISOString(),
       unitIds: costUnitRows.filter((cu) => cu.costId === cost.id).map((cu) => cu.unitId),
-      receiptCount: receiptCount.get(cost.id) ?? 0,
+      documents: documentRefs.get(cost.id) ?? [],
     })),
     values: valueRows,
     payments: paymentRows,

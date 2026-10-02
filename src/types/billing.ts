@@ -1,6 +1,16 @@
 export type PeriodStatus = "draft" | "released";
 export type AllocationSource = "unit_area" | "unit_persons" | "equal" | "manual";
 export type OcrStatus = "none" | "pending" | "done" | "failed";
+export type DocumentType = "invoice" | "payment_proof" | "contract" | "other";
+export type PaymentStatus = "received" | "pending" | "cancelled";
+
+/** Kurzform eines Dokuments für Listen von Kosten und Einzahlungen. */
+export interface DocumentRef {
+  id: number;
+  fileName: string;
+  type: DocumentType;
+  mimeType: string;
+}
 
 export interface UnitDto {
   id: number;
@@ -63,7 +73,8 @@ export interface CostDto {
   allocationKeyName: string;
   notes: string | null;
   unitIds: number[];
-  receiptCount: number;
+  documents: DocumentRef[];
+  createdAt: string;
 }
 
 export interface PaymentDto {
@@ -76,6 +87,10 @@ export interface PaymentDto {
   amountCents: number;
   purpose: string | null;
   note: string | null;
+  status: PaymentStatus;
+  /** Zahlungsnachweise und andere verknüpfte Dokumente. */
+  documents: DocumentRef[];
+  createdAt: string;
 }
 
 /** Normalisierte OCR-Felder – unabhängig vom OCR-Anbieter. */
@@ -89,11 +104,20 @@ export interface OcrFields {
   confidence: number | null;
 }
 
-export interface ReceiptDto {
+/** Verknüpfung eines Dokuments, mit fertigem Anzeigetext. */
+export interface DocumentLinkRef {
+  id: number;
+  label: string;
+}
+
+export interface DocumentDto {
   id: number;
   periodId: number;
-  costId: number | null;
-  costLabel: string | null;
+  year: number;
+  type: DocumentType;
+  description: string | null;
+  unitId: number | null;
+  unitName: string | null;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -101,10 +125,12 @@ export interface ReceiptDto {
   supplier: string | null;
   invoiceNumber: string | null;
   amountCents: number | null;
-  notes: string | null;
   ocrStatus: OcrStatus;
   ocr: OcrFields | null;
+  /** Upload-Datum. */
   createdAt: string;
+  costs: DocumentLinkRef[];
+  payments: DocumentLinkRef[];
 }
 
 // ---------------------------------------------------------------------------
@@ -132,15 +158,19 @@ export interface StatementLine {
   shares: StatementShare[];
   /** false, wenn die Summe der Schlüsselwerte 0 ist – der Betrag bleibt dann unverteilt. */
   distributable: boolean;
-  receiptCount: number;
+  documents: DocumentRef[];
+  createdAt: string;
 }
 
 export interface UnitBalance {
   unitId: number;
   unitName: string;
   costCents: number;
+  /** Nur eingegangene Einzahlungen. */
   paymentCents: number;
-  /** Einzahlungen minus Kostenanteil: positiv = Guthaben, negativ = offener Betrag. */
+  /** Erwartete, noch nicht eingegangene Einzahlungen – zählen nicht in den Saldo. */
+  pendingPaymentCents: number;
+  /** Einzahlungen minus Kostenanteil: positiv = Guthaben, negativ = Nachzahlung. */
   balanceCents: number;
 }
 

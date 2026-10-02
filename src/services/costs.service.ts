@@ -10,7 +10,7 @@ import {
   costCategories,
   costs,
   costUnits,
-  receipts,
+  documentLinks,
   units,
 } from "@/db/schema";
 import { DomainError, NotFoundError } from "@/lib/errors";
@@ -18,6 +18,7 @@ import type { CostInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
 import type { CostDto } from "@/types/billing";
 
+import { getDocumentRefs } from "./documents.service";
 import { assertDraft, getVisiblePeriod } from "./periods.service";
 
 /** Vollständige Kostenliste eines Jahres – Sicht der Verwaltung auf alle TOPs. */
@@ -41,19 +42,14 @@ export async function listCosts(actor: SessionUser, periodId: number): Promise<C
   if (rows.length === 0) return [];
 
   const costIds = rows.map((row) => row.cost.id);
-  const [unitRows, receiptRows] = await Promise.all([
+  const [unitRows, documentRefs] = await Promise.all([
     db
       .select()
       .from(costUnits)
       .where(inArray(costUnits.costId, costIds))
       .orderBy(asc(costUnits.unitId)),
-    db
-      .select({ costId: receipts.costId, n: count() })
-      .from(receipts)
-      .where(inArray(receipts.costId, costIds))
-      .groupBy(receipts.costId),
+    getDocumentRefs("cost", costIds),
   ]);
-  const receiptCount = new Map(receiptRows.map((row) => [row.costId, row.n]));
 
   return rows.map(({ cost, categoryName, allocationKeyName }) => ({
     id: cost.id,
@@ -69,7 +65,8 @@ export async function listCosts(actor: SessionUser, periodId: number): Promise<C
     allocationKeyName,
     notes: cost.notes,
     unitIds: unitRows.filter((u) => u.costId === cost.id).map((u) => u.unitId),
-    receiptCount: receiptCount.get(cost.id) ?? 0,
+    documents: documentRefs.get(cost.id) ?? [],
+    createdAt: cost.createdAt.toISOString(),
   }));
 }
 
@@ -111,19 +108,16 @@ function toColumns(input: CostInput) {
   };
 }
 
-export async function createCost(
-  actor: SessionUser,
-  periodId: number,
-  input: CostInput,
-): Promise<number> {
+/** Legt eine Kostenposition im Abrechnungsjahr `input.periodId` an und gibt ihre ID zurück. */
+export async function createCost(actor: SessionUser, input: CostInput): Promise<number> {
   authorizeGlobalWrite(actor, "cost:write");
-  assertDraft(await getVisiblePeriod(actor, periodId));
+  assertDraft(await getVisiblePeriod(actor, input.periodId));
 
   return getDb().transaction(async (tx) => {
     await assertReferences(tx, input);
     const [row] = await tx
       .insert(costs)
-      .values({ ...toColumns(input), periodId, createdBy: actor.id })
+      .values({ ...toColumns(input), periodId: input.periodId, createdBy: actor.id })
       .returning({ id: costs.id });
     await tx
       .insert(costUnits)
@@ -148,11 +142,32 @@ export async function updateCost(
   input: CostInput,
 ): Promise<void> {
   authorizeGlobalWrite(actor, "cost:write");
-  assertDraft(await getVisiblePeriod(actor, await getCostPeriod(costId)));
+  const currentPeriodId = await getCostPeriod(costId);
+  assertDraft(await getVisiblePeriod(actor, currentPeriodId));
+
+  const moving = input.periodId !== currentPeriodId;
+  if (moving) {
+    // Auch das Zieljahr muss noch bearbeitbar sein.
+    assertDraft(await getVisiblePeriod(actor, input.periodId));
+    // Dokumente gehören zu einem Abrechnungsjahr – eine verknüpfte Position kann nicht wandern.
+    const [{ n }] = await getDb()
+      .select({ n: count() })
+      .from(documentLinks)
+      .where(eq(documentLinks.costId, costId));
+    if (n > 0) {
+      throw new DomainError(
+        "Die Kostenposition hat verknüpfte Dokumente. Bitte zuerst die Verknüpfung lösen, " +
+          "dann das Abrechnungsjahr ändern.",
+      );
+    }
+  }
 
   await getDb().transaction(async (tx) => {
     await assertReferences(tx, input);
-    await tx.update(costs).set(toColumns(input)).where(eq(costs.id, costId));
+    await tx
+      .update(costs)
+      .set({ ...toColumns(input), periodId: input.periodId })
+      .where(eq(costs.id, costId));
     await tx.delete(costUnits).where(eq(costUnits.costId, costId));
     await tx
       .insert(costUnits)
@@ -160,7 +175,7 @@ export async function updateCost(
   });
 }
 
-/** Verknüpfte Belege bleiben erhalten und verlieren nur die Zuordnung. */
+/** Verknüpfte Dokumente bleiben erhalten und verlieren nur die Zuordnung. */
 export async function deleteCost(actor: SessionUser, costId: number): Promise<void> {
   authorizeGlobalWrite(actor, "cost:delete");
   assertDraft(await getVisiblePeriod(actor, await getCostPeriod(costId)));

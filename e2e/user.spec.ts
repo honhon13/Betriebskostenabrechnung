@@ -28,7 +28,7 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
   });
 
   test("nicht freigegebenes Jahr existiert für USER nicht", async () => {
-    for (const path of ["", "/kosten", "/schluessel", "/belege"]) {
+    for (const path of ["", "/kosten", "/monate", "/schluessel", "/belege"]) {
       const response = await page.goto(`/abrechnung/${CURRENT_YEAR}${path}`);
       expect(response?.status(), path).toBe(404);
     }
@@ -55,12 +55,37 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
     await expect(page.getByRole("link", { name: "Meine Abrechnung" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Kosten", exact: true })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Umlageschlüssel" })).toHaveCount(0);
-    await expect(page.getByRole("columnheader", { name: "Mein Anteil" })).toBeVisible();
+    await expect(page.getByText("Mein Kostenanteil")).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Anteil" })).toBeVisible();
     // TOP 1 ist an der ihr direkt zugeordneten Thermenwartung beteiligt.
     await expect(page.getByRole("row").filter({ hasText: "Thermenwartung TOP 1" })).toBeVisible();
+    // Nur die eigene TOP – keine Abschnitte, Spalten oder Summen anderer TOPs.
+    await expect(page.locator("details")).toHaveCount(1);
+    await expect(page.getByRole("main").getByText(/TOP [23]/)).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Kostenverteilung" })).toHaveCount(0);
     for (const name of ["Freigeben", "Freigabe zurücknehmen", "Neues Jahr"]) {
       await expect(page.getByRole("button", { name })).toHaveCount(0);
     }
+  });
+
+  test("Jahres- und Monatsübersicht zeigen nur die eigene TOP", async () => {
+    await page.goto("/abrechnung");
+    await expect(page.getByRole("columnheader", { name: "Mein Kostenanteil" })).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: String(RELEASED_YEAR) })).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: String(CURRENT_YEAR) })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Neues Jahr" })).toHaveCount(0);
+
+    // ?top=2 wird ignoriert – es bleibt die eigene TOP.
+    await page.goto(`/abrechnung/${RELEASED_YEAR}/monate?top=2`);
+    await expect(page.getByText("TOP 1 · Kosten nach Rechnungsdatum")).toBeVisible();
+    await expect(page.getByLabel("TOP", { exact: true })).toHaveCount(0);
+  });
+
+  test("Dokumente: nur lesen, kein Upload", async () => {
+    await page.goto("/dokumente");
+    await expect(page.getByText("Dokumente, die deine TOP betreffen.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Dokument hochladen" })).toHaveCount(0);
+    await expect(page.getByLabel("TOP", { exact: true })).toHaveCount(0);
   });
 
   test("Einzahlungen: nur eigene, ohne Erfassen und Löschen", async () => {
@@ -75,7 +100,7 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
   });
 
   test("Schreibzugriffe werden serverseitig abgelehnt", async () => {
-    const upload = await page.request.post("/api/belege", {
+    const upload = await page.request.post("/api/dokumente", {
       multipart: {
         periodId: "1",
         file: { name: "x.pdf", mimeType: "application/pdf", buffer: tinyPdf("user") },
@@ -88,7 +113,7 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
     const other = await browser.newPage();
     await login(other, "top3");
     await other.goto(`/abrechnung/${RELEASED_YEAR}`);
-    await expect(other.getByRole("columnheader", { name: "Mein Anteil" })).toBeVisible();
+    await expect(other.getByRole("columnheader", { name: "Anteil" })).toBeVisible();
     await expect(other.getByText("Thermenwartung TOP 1")).toHaveCount(0);
     await other.close();
   });

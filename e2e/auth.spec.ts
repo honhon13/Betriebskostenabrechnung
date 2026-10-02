@@ -10,8 +10,8 @@ test.describe("Anmeldung", () => {
   });
 
   test("API antwortet ohne Sitzung mit 401", async ({ request }) => {
-    expect((await request.get("/api/belege/1/datei")).status()).toBe(401);
-    expect((await request.post("/api/belege", { multipart: { periodId: "1" } })).status()).toBe(401);
+    expect((await request.get("/api/dokumente/1/datei")).status()).toBe(401);
+    expect((await request.post("/api/dokumente", { multipart: { periodId: "1" } })).status()).toBe(401);
   });
 
   test("lehnt falsche Zugangsdaten ab, ohne zu verraten, was falsch war", async ({ page }) => {

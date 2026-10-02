@@ -1,8 +1,16 @@
 # Betriebskostenabrechnung
 
 Private Betriebskostenabrechnung für drei Wohneinheiten (TOP 1–3): Kosten erfassen, nach
-Umlageschlüsseln verteilen, Einzahlungen verbuchen, Belege ablegen und die Abrechnung je
+Umlageschlüsseln verteilen, Einzahlungen verbuchen, Dokumente ablegen und die Abrechnung je
 TOP freigeben.
+
+| Bereich | Inhalt |
+| --- | --- |
+| **Dashboard** | Abrechnungsperiode, Gesamtkosten, Kosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
+| **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen, Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente |
+| **Einzahlungen** | Je TOP mit Datum, Betrag, Jahr, Beschreibung, Zahlungsstatus und Nachweis; Guthaben/Nachzahlung je TOP |
+| **Dokumente** | Rechnungen, Zahlungsnachweise, Verträge, Sonstiges – mit Suche, Filtern, Sortierung, Vorschau und Download |
+| **Einstellungen** | Konto, Stammdaten (TOPs, Kostenarten, Umlageschlüssel), Benutzer und Rollen |
 
 Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · Drizzle ORM · Neon PostgreSQL ·
 deploybar auf Vercel.
@@ -26,13 +34,17 @@ geändert werden. Der Seed ist idempotent und überschreibt keine bestehenden Pa
 
 | Benutzer | Rolle | Darf |
 | --- | --- | --- |
-| `top2` | ADMIN | Alles: Kosten, Einzahlungen, Belege, Freigabe, Löschen, Stammdaten, Benutzer |
+| `top2` | ADMIN | Alles: Kosten, Einzahlungen, Dokumente, Freigabe, Löschen, Stammdaten, Benutzer |
 | `top1`, `top3` | USER | Nur lesen – und nur **freigegebene** Daten der **eigenen** TOP |
 
 Eine Abrechnung ist zunächst ein **Entwurf** und nur für die Verwaltung sichtbar. Mit
-„Freigeben" sehen die TOPs ihren Kostenanteil, ihre Einzahlungen und die Belege zu den
-Kostenpositionen, an denen sie beteiligt sind. Freigegebene Jahre sind gegen Änderungen an
-Kosten und Umlageschlüsseln gesperrt („Freigabe zurücknehmen" hebt das auf).
+„Freigeben" sehen die TOPs ihren Kostenanteil, ihre Einzahlungen und die Dokumente, die sie
+betreffen. Freigegebene Jahre sind gegen Änderungen an Kosten und Umlageschlüsseln gesperrt
+(„Freigabe zurücknehmen" hebt das auf).
+
+Ein Dokument betrifft eine TOP, wenn es ihr direkt zugeordnet ist, an einer Kostenposition
+hängt, an der sie beteiligt ist, oder an einer ihrer Einzahlungen. Dokumente ohne jede
+Zuordnung sieht nur die Verwaltung. Dieselbe Regel gilt für Liste, Vorschau und Download.
 
 Rollen sind Bündel von Rechten und lassen sich unter *Einstellungen → Benutzer & Rollen*
 anpassen oder neu anlegen. Zwei Rechte steuern den Datenumfang:
@@ -48,10 +60,10 @@ src/
   components/    UI-Bausteine (ui, forms, layout) und Fachkomponenten
   auth/          Passwort-Hashing, Sitzungen, Rechtekatalog, RBAC-Prüfungen
   services/      Fachlogik mit Rechteprüfung – einziger Weg zur Datenbank
-    storage/     Ablage der Belegdateien (lokal, Vercel Blob)
+    storage/     Ablage der Dokumentdateien (lokal, Vercel Blob, S3-kompatibel)
     ocr/         OCRService (Azure Document Intelligence)
   db/            Drizzle-Schema, Migrationen, Seed
-  lib/           Reine Hilfsfunktionen: Verteilung, Beträge, Validierung, Formate
+  lib/           Reine Hilfsfunktionen: Verteilung, Monatsübersicht, Beträge, Validierung
   types/         DTOs zwischen Services und Oberfläche
 tests/           Unit-Tests (Vitest)
 e2e/             End-to-End-Tests (Playwright)
@@ -75,6 +87,24 @@ Sitzungen des Benutzers.
 **Beträge** werden in Cent gespeichert und gerechnet. Die Verteilung nutzt das Verfahren der
 größten Reste – die Summe der Anteile entspricht immer exakt dem Betrag.
 
+**Berechnung:** Einzahlungen − Kostenanteil = Guthaben (positiv) bzw. Nachzahlung (negativ).
+Es zählen nur Einzahlungen mit Status „Eingegangen"; „Offen" merkt eine erwartete Zahlung vor,
+„Storniert" zählt nirgends. Die Monatsübersicht ordnet Kosten nach Rechnungsdatum und
+Einzahlungen nach Zahlungsdatum zu; was in keinen Monat des Jahres fällt, steht in einer
+Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
+
+### Datenmodell
+
+| Tabelle | Inhalt |
+| --- | --- |
+| `users`, `roles`, `role_permissions`, `sessions` | Benutzer, Rollen, Rechte, Sitzungen |
+| `units` | TOPs mit Wohnfläche und Personen |
+| `billing_periods` | Abrechnungsjahre mit Status Entwurf/Freigegeben |
+| `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
+| `costs`, `cost_units` | Kostenpositionen und ihre TOP-Zuordnung |
+| `payments` | Einzahlungen je TOP mit Zahlungsstatus |
+| `documents`, `document_links` | Dokumente (Metadaten, Verweis auf den Storage) und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
+
 ### Erweitern
 
 | Vorhaben | Wo |
@@ -86,22 +116,33 @@ größten Reste – die Summe der Anteile entspricht immer exakt dem Betrag.
 | Anderer OCR-Anbieter | Klasse mit `OCRService` + `services/ocr/index.ts` |
 | Schemaänderung | `src/db/schema.ts` ändern → `npm run db:generate` → `npm run db:migrate` |
 
-## Belege und OCR
+## Dokumente, Storage und OCR
 
-Dateien liegen nie in PostgreSQL – die Tabelle `receipts` speichert nur Anbieter und
-Schlüssel. Jeder Abruf läuft über `/api/belege/[id]/datei` und wird dort gegen Sitzung, Rechte
-und Sichtbereich geprüft. Erlaubt sind PDF, JPEG, PNG, WebP, HEIC und TIFF bis 4 MB; der Typ
-wird am Dateiinhalt erkannt. Größere Fotos verkleinert der Browser vor dem Upload.
+Dateien liegen nie in PostgreSQL – die Tabelle `documents` speichert nur Anbieter und
+Schlüssel. Jeder Abruf läuft über `/api/dokumente/[id]/datei` und wird dort gegen Sitzung,
+Rechte und Sichtbereich geprüft. Erlaubt sind PDF, JPEG, PNG, WebP, HEIC und TIFF bis 4 MB
+(Grenze der Vercel Functions); der Typ wird am Dateiinhalt erkannt. Größere Fotos verkleinert
+der Browser vor dem Upload.
+
+Dokumente lassen sich an drei Stellen hochladen: in der Dokumentenverwaltung, direkt beim
+Erfassen einer Kostenposition (als Rechnung) und bei einer Einzahlung (als Zahlungsnachweis).
+Ein Dokument kann mit mehreren Kostenpositionen verknüpft sein, z. B. eine Vorschreibung, die
+auf mehrere Positionen aufgeteilt wurde.
 
 | `STORAGE_DRIVER` | Verwendung |
 | --- | --- |
 | `local` | Dateisystem unter `.data/uploads` – nur lokale Entwicklung |
 | `vercel-blob` | Privater Vercel-Blob-Store, benötigt `BLOB_READ_WRITE_TOKEN` |
+| `s3` | S3-kompatibler Speicher (AWS S3, Cloudflare R2, MinIO …) mit privatem Bucket, `S3_*`-Variablen |
+
+Ohne Angabe wählt die App automatisch: Vercel Blob, sobald ein Token gesetzt ist, sonst S3,
+sobald Endpoint und Bucket gesetzt sind, sonst lokal. Jedes Dokument merkt sich seinen
+Anbieter – ein späterer Wechsel bricht bestehende Dokumente nicht.
 
 OCR ist vorbereitet und wird aktiv, sobald `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` und
-`AZURE_DOCUMENT_INTELLIGENCE_KEY` gesetzt sind. Dann erscheint bei jedem Beleg „per OCR
+`AZURE_DOCUMENT_INTELLIGENCE_KEY` gesetzt sind. Dann erscheint bei jedem Dokument „per OCR
 auslesen": Datum, Rechnungsnummer, Lieferant und Betrag werden mit dem Modell
-`prebuilt-invoice` erkannt und füllen leere Metadaten-Felder.
+`prebuilt-invoice` erkannt und füllen leere Rechnungsdaten-Felder.
 
 ## Deployment auf Vercel
 
@@ -110,10 +151,13 @@ auslesen": Datum, Rechnungsnummer, Lieferant und Betrag werden mit dem Modell
 2. Unter *Storage* die Neon-Datenbank mit dem Projekt verbinden. Die Integration setzt
    `DATABASE_URL` und `DATABASE_URL_UNPOOLED` automatisch.
 3. Unter *Storage* einen **privaten** Blob-Store anlegen und verbinden
-   (`BLOB_READ_WRITE_TOKEN`). Ohne ihn sind Uploads auf Vercel deaktiviert.
+   (`BLOB_READ_WRITE_TOKEN`) – oder die `S3_*`-Variablen setzen. Ohne dauerhaften Speicher
+   sind Uploads auf Vercel deaktiviert.
 4. Optional die Azure-Variablen für OCR setzen.
-5. Deployen. Migrationen laufen bewusst nicht automatisch beim Build, sondern mit
-   `npm run db:migrate` gegen die Produktionsdatenbank.
+5. Deployen. Vercel ruft `npm run vercel-build` auf: bei einem **Production**-Deployment
+   laufen zuerst die ausstehenden Migrationen, dann der Build. Schlägt eine Migration fehl,
+   bricht das Deployment ab und die bisherige Version bleibt online. Preview-Deployments
+   ändern das Schema nicht (sie teilen sich die Datenbank mit der Produktion).
 
 Alle Variablen sind in [.env.example](.env.example) beschrieben.
 
@@ -123,10 +167,11 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Beträge, RBAC, Passwörter, Service-Rechte |
+| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Beträge, RBAC, Passwörter, Storage, Service-Rechte |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |
+| `npm run vercel-build` | Wird von Vercel aufgerufen: Migrationen (nur Production) + Build |
 | `npm run db:seed` / `db:seed:demo` | Grunddaten / Beispieldaten |
 | `npm run db:studio` | Drizzle Studio |
 

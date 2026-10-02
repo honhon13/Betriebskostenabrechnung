@@ -41,9 +41,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# lokale Beleg-Ablage (STORAGE_DRIVER=local)
-/.data/
-
 # playwright
 /test-results/
 /playwright-report/

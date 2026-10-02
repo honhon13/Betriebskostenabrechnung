@@ -14,7 +14,7 @@ export function BalanceBadge({ cents }: { cents: number }) {
   if (cents < 0) {
     return (
       <Badge tone="warning" icon={<TriangleAlert aria-hidden />}>
-        Offen
+        Nachzahlung
       </Badge>
     );
   }
@@ -26,5 +26,5 @@ export function BalanceBadge({ cents }: { cents: number }) {
 }
 
 export function balanceLabel(cents: number): string {
-  return cents > 0 ? "Guthaben" : cents < 0 ? "Offener Betrag" : "Saldo";
+  return cents > 0 ? "Guthaben" : cents < 0 ? "Nachzahlung" : "Saldo";
 }

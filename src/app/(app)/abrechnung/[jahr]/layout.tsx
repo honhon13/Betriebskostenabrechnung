@@ -1,4 +1,4 @@
-import { CircleCheck, Trash2, Undo2 } from "lucide-react";
+import { CircleCheck, ListOrdered, Trash2, Undo2 } from "lucide-react";
 import { notFound } from "next/navigation";
 
 import { deletePeriodAction, setPeriodStatusAction } from "@/app/actions/billing";
@@ -9,6 +9,7 @@ import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { Tabs, type TabItem } from "@/components/layout/tabs";
 import { YearSelect } from "@/components/layout/year-select";
+import { ButtonLink } from "@/components/ui/button";
 import { NoAccess } from "@/components/ui/no-access";
 import { PageHeader } from "@/components/ui/page";
 import { formatDate, formatDateTime } from "@/lib/format";
@@ -32,8 +33,11 @@ export default async function BillingYearLayout({
   const tabs: TabItem[] = [
     { href: base, label: scope.allUnits ? "Übersicht" : "Meine Abrechnung" },
     ...(scope.allUnits && can(user, "cost:read") ? [{ href: `${base}/kosten`, label: "Kosten" }] : []),
+    ...(can(user, "cost:read") && can(user, "payment:read")
+      ? [{ href: `${base}/monate`, label: "Monate" }]
+      : []),
     ...(scope.allUnits ? [{ href: `${base}/schluessel`, label: "Umlageschlüssel" }] : []),
-    ...(can(user, "receipt:read") ? [{ href: `${base}/belege`, label: "Belege" }] : []),
+    ...(can(user, "document:read") ? [{ href: `${base}/belege`, label: "Dokumente" }] : []),
   ];
 
   const released = period.status === "released";
@@ -52,6 +56,10 @@ export default async function BillingYearLayout({
           </span>
         }
       >
+        <ButtonLink href="/abrechnung" variant="ghost">
+          <ListOrdered aria-hidden />
+          Alle Jahre
+        </ButtonLink>
         <YearSelect
           years={periods.map((p) => p.year)}
           value={period.year}
@@ -78,7 +86,7 @@ export default async function BillingYearLayout({
             description={
               released
                 ? "Die Abrechnung ist dann für TOP 1 und TOP 3 nicht mehr sichtbar und kann wieder bearbeitet werden."
-                : "Nach der Freigabe sehen die TOPs ihren Anteil, ihre Einzahlungen und die zugehörigen Belege. Kosten und Umlageschlüssel sind danach gesperrt."
+                : "Nach der Freigabe sehen die TOPs ihren Anteil, ihre Einzahlungen und die zugehörigen Dokumente. Kosten und Umlageschlüssel sind danach gesperrt."
             }
             confirmLabel={released ? "Zurücknehmen" : "Freigeben"}
             action={setPeriodStatusAction.bind(null, period.id, released ? "draft" : "released")}
@@ -92,7 +100,7 @@ export default async function BillingYearLayout({
             trigger={<Trash2 aria-hidden />}
             triggerLabel={`Abrechnungsjahr ${period.year} löschen`}
             title={`Abrechnungsjahr ${period.year} löschen?`}
-            description="Das Jahr kann nur gelöscht werden, wenn es keine Kosten, Einzahlungen und Belege mehr enthält."
+            description="Das Jahr kann nur gelöscht werden, wenn es keine Kosten, Einzahlungen und Dokumente mehr enthält."
             confirmLabel="Löschen"
             destructive
             action={deletePeriodAction.bind(null, period.id)}

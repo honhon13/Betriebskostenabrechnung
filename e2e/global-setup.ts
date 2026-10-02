@@ -15,10 +15,14 @@ export default async function globalSetup() {
   const db = drizzle(pool, { schema });
 
   try {
-    await db.delete(schema.receipts).where(like(schema.receipts.fileName, "e2e-beleg-%"));
+    await db.delete(schema.documents).where(like(schema.documents.fileName, "e2e-%"));
     await db.delete(schema.costs).where(like(schema.costs.description, "E2E Testkosten %"));
     await db.delete(schema.payments).where(like(schema.payments.purpose, "E2E Einzahlung %"));
     await db.delete(schema.users).where(like(schema.users.username, "e2e-%"));
+    // Das Folgejahr legt nur ein Test an – ein Rest davon würde den nächsten Lauf stören.
+    await db
+      .delete(schema.billingPeriods)
+      .where(eq(schema.billingPeriods.year, new Date().getFullYear() + 1));
     await db
       .update(schema.billingPeriods)
       .set({ status: "draft", releasedAt: null, releasedBy: null })

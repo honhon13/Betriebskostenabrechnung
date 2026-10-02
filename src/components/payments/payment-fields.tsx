@@ -1,5 +1,8 @@
 import { Field } from "@/components/forms/field";
-import { Input, Select, Textarea } from "@/components/ui/input";
+import { fileInputClass, Input, Select, Textarea } from "@/components/ui/input";
+import { MAX_UPLOAD_BYTES, UPLOAD_ACCEPT } from "@/lib/files";
+import { formatFileSize } from "@/lib/format";
+import { PAYMENT_STATUS_LABELS, PAYMENT_STATUSES } from "@/lib/labels";
 import { centsToInput } from "@/lib/money";
 import type { PaymentDto, PeriodDto, UnitDto } from "@/types/billing";
 
@@ -9,9 +12,17 @@ interface PaymentFieldsProps {
   payment?: PaymentDto;
   /** Vorbelegung für neue Einzahlungen. */
   defaults?: { periodId?: number; unitId?: number; date?: string };
+  /** Nachweis-Upload anbieten (setzt das Recht zum Hochladen voraus). */
+  allowUpload?: boolean;
 }
 
-export function PaymentFields({ periods, units, payment, defaults }: PaymentFieldsProps) {
+export function PaymentFields({
+  periods,
+  units,
+  payment,
+  defaults,
+  allowUpload = false,
+}: PaymentFieldsProps) {
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -53,12 +64,36 @@ export function PaymentFields({ periods, units, payment, defaults }: PaymentFiel
           </Select>
         </Field>
       </div>
-      <Field label="Verwendungszweck" name="purpose" optional>
-        <Input name="purpose" defaultValue={payment?.purpose ?? ""} maxLength={200} />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+        <Field label="Beschreibung / Verwendungszweck" name="purpose" optional>
+          <Input name="purpose" defaultValue={payment?.purpose ?? ""} maxLength={200} />
+        </Field>
+        <Field label="Zahlungsstatus" name="status">
+          <Select name="status" defaultValue={payment?.status ?? "received"}>
+            {PAYMENT_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {PAYMENT_STATUS_LABELS[status]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <p className="-mt-2 text-xs text-subtle">
+        Nur eingegangene Zahlungen zählen in der Abrechnung. „Offen“ merkt eine erwartete Zahlung vor.
+      </p>
       <Field label="Notiz" name="note" optional>
         <Textarea name="note" defaultValue={payment?.note ?? ""} rows={2} />
       </Field>
+      {allowUpload ? (
+        <Field
+          label={payment && payment.documents.length > 0 ? "Weiteren Nachweis anhängen" : "Nachweis"}
+          name="file"
+          optional
+          hint={`Kontoauszug oder Beleg als PDF/Foto bis ${formatFileSize(MAX_UPLOAD_BYTES)}.`}
+        >
+          <input type="file" name="file" accept={UPLOAD_ACCEPT} className={fileInputClass} />
+        </Field>
+      ) : null}
     </>
   );
 }

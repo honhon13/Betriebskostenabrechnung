@@ -1,21 +1,23 @@
 import "server-only";
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 
 import { ForbiddenError } from "@/auth/errors";
 import { authorize, canAccessUnit, getDataScope } from "@/auth/rbac";
 import { getDb } from "@/db/client";
-import { billingPeriods, payments, units } from "@/db/schema";
+import { billingPeriods, documentLinks, payments, units } from "@/db/schema";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { PaymentInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
-import type { PaymentDto } from "@/types/billing";
+import type { PaymentDto, PaymentStatus } from "@/types/billing";
 
+import { getDocumentRefs } from "./documents.service";
 import { getVisiblePeriod } from "./periods.service";
 
 export interface PaymentFilter {
   periodId?: number;
   unitId?: number;
+  status?: PaymentStatus;
 }
 
 /**
@@ -41,10 +43,16 @@ export async function listPayments(
       and(
         filter.periodId ? eq(payments.periodId, filter.periodId) : undefined,
         unitId ? eq(payments.unitId, unitId) : undefined,
+        filter.status ? eq(payments.status, filter.status) : undefined,
         scope.includeDrafts ? undefined : inArray(billingPeriods.status, ["released"]),
       ),
     )
     .orderBy(desc(payments.paymentDate), desc(payments.id));
+
+  const documentRefs = await getDocumentRefs(
+    "payment",
+    rows.map((row) => row.payment.id),
+  );
 
   return rows.map(({ payment, year, unitName }) => ({
     id: payment.id,
@@ -56,6 +64,9 @@ export async function listPayments(
     amountCents: payment.amountCents,
     purpose: payment.purpose,
     note: payment.note,
+    status: payment.status,
+    documents: documentRefs.get(payment.id) ?? [],
+    createdAt: payment.createdAt.toISOString(),
   }));
 }
 
@@ -83,15 +94,19 @@ function toColumns(input: PaymentInput) {
     amountCents: input.amount,
     purpose: input.purpose,
     note: input.note,
+    status: input.status,
   };
 }
 
-export async function createPayment(actor: SessionUser, input: PaymentInput): Promise<void> {
+/** Legt eine Einzahlung an und gibt ihre ID zurück (z. B. um einen Nachweis anzuhängen). */
+export async function createPayment(actor: SessionUser, input: PaymentInput): Promise<number> {
   authorize(actor, "payment:write");
   await assertWritable(actor, input);
-  await getDb()
+  const [row] = await getDb()
     .insert(payments)
-    .values({ ...toColumns(input), createdBy: actor.id });
+    .values({ ...toColumns(input), createdBy: actor.id })
+    .returning({ id: payments.id });
+  return row.id;
 }
 
 /** Lädt eine bestehende Einzahlung und prüft, dass sie im Sichtbereich des Benutzers liegt. */
@@ -110,8 +125,23 @@ export async function updatePayment(
   input: PaymentInput,
 ): Promise<void> {
   authorize(actor, "payment:write");
-  await getAccessiblePayment(actor, paymentId);
+  const current = await getAccessiblePayment(actor, paymentId);
   await assertWritable(actor, input);
+
+  if (input.periodId !== current.periodId) {
+    // Nachweise gehören zum Abrechnungsjahr der Einzahlung.
+    const [{ n }] = await getDb()
+      .select({ n: count() })
+      .from(documentLinks)
+      .where(eq(documentLinks.paymentId, paymentId));
+    if (n > 0) {
+      throw new DomainError(
+        "Die Einzahlung hat verknüpfte Dokumente. Bitte zuerst die Verknüpfung lösen, " +
+          "dann das Abrechnungsjahr ändern.",
+      );
+    }
+  }
+
   await getDb().update(payments).set(toColumns(input)).where(eq(payments.id, paymentId));
 }
 

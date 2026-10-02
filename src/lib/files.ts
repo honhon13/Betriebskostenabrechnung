@@ -52,3 +52,8 @@ export function sanitizeFileName(name: string): string {
     .trim();
   return (cleaned || "beleg").slice(0, 150);
 }
+
+/** Geschützte URL einer Dokumentdatei – zum Anzeigen oder (mit `download`) zum Herunterladen. */
+export function documentUrl(id: number, download = false): string {
+  return `/api/dokumente/${id}/datei${download ? "?download" : ""}`;
+}

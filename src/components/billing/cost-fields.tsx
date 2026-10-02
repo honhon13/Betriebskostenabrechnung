@@ -3,20 +3,36 @@
 import { useState } from "react";
 
 import { Field } from "@/components/forms/field";
-import { Checkbox, Input, Select, Textarea } from "@/components/ui/input";
+import { Checkbox, fileInputClass, Input, Select, Textarea } from "@/components/ui/input";
+import { MAX_UPLOAD_BYTES, UPLOAD_ACCEPT } from "@/lib/files";
+import { formatFileSize } from "@/lib/format";
 import { centsToInput } from "@/lib/money";
 import type { AllocationKeyDto, CategoryDto, CostDto, UnitDto } from "@/types/billing";
 
 interface CostFieldsProps {
+  /** Abrechnungsjahre, in denen noch erfasst werden darf (Entwürfe). */
+  periods: { id: number; year: number }[];
+  /** Jahr der Seite – Vorauswahl für neue Kostenpositionen. */
+  periodId: number;
   categories: CategoryDto[];
   allocationKeys: AllocationKeyDto[];
   units: UnitDto[];
   /** Vorhandene Kostenposition beim Bearbeiten. */
   cost?: CostDto;
+  /** Beleg-Upload anbieten (setzt das Recht zum Hochladen voraus). */
+  allowUpload?: boolean;
 }
 
 /** Formularfelder einer Kostenposition: Kostenart, Betrag, Umlageschlüssel und TOP-Zuordnung. */
-export function CostFields({ categories, allocationKeys, units, cost }: CostFieldsProps) {
+export function CostFields({
+  periods,
+  periodId,
+  categories,
+  allocationKeys,
+  units,
+  cost,
+  allowUpload = false,
+}: CostFieldsProps) {
   // Inaktive Einträge nur anbieten, wenn die Position sie bereits verwendet.
   const categoryOptions = categories.filter((c) => c.isActive || c.id === cost?.categoryId);
   const keyOptions = allocationKeys.filter((k) => k.isActive || k.id === cost?.allocationKeyId);
@@ -31,22 +47,33 @@ export function CostFields({ categories, allocationKeys, units, cost }: CostFiel
 
   return (
     <>
-      <Field label="Kostenart" name="categoryId">
-        <Select
-          name="categoryId"
-          defaultValue={initialCategory}
-          onChange={(event) => {
-            if (!keyTouched) setKeyId(defaultKeyOf(Number(event.target.value)));
-          }}
-          required
-        >
-          {categoryOptions.map((category) => (
-            <option key={category.id} value={category.id}>
-              {category.name}
-            </option>
-          ))}
-        </Select>
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+        <Field label="Kostenart" name="categoryId">
+          <Select
+            name="categoryId"
+            defaultValue={initialCategory}
+            onChange={(event) => {
+              if (!keyTouched) setKeyId(defaultKeyOf(Number(event.target.value)));
+            }}
+            required
+          >
+            {categoryOptions.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Abrechnungsjahr" name="periodId">
+          <Select name="periodId" defaultValue={cost?.periodId ?? periodId} required>
+            {periods.map((period) => (
+              <option key={period.id} value={period.id}>
+                {period.year}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
 
       <Field label="Beschreibung" name="description">
         <Input name="description" defaultValue={cost?.description} maxLength={200} required />
@@ -124,6 +151,17 @@ export function CostFields({ categories, allocationKeys, units, cost }: CostFiel
       <Field label="Notiz" name="notes" optional>
         <Textarea name="notes" defaultValue={cost?.notes ?? ""} rows={2} />
       </Field>
+
+      {allowUpload ? (
+        <Field
+          label={cost && cost.documents.length > 0 ? "Weiteren Beleg anhängen" : "Beleg"}
+          name="file"
+          optional
+          hint={`PDF oder Foto bis ${formatFileSize(MAX_UPLOAD_BYTES)} – wird als Rechnung mit dieser Kostenposition verknüpft.`}
+        >
+          <input type="file" name="file" accept={UPLOAD_ACCEPT} className={fileInputClass} />
+        </Field>
+      ) : null}
     </>
   );
 }

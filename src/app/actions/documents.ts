@@ -6,34 +6,35 @@ import { requireActor } from "@/auth/current-user";
 import { runAction } from "@/lib/action";
 import type { ActionState } from "@/lib/action-state";
 import { formToObject } from "@/lib/form-data";
-import { parseId, receiptMetaSchema } from "@/lib/validation";
-import { deleteReceipt, runReceiptOcr, updateReceipt } from "@/services/receipts.service";
+import { documentMetaSchema, parseId } from "@/lib/validation";
+import { deleteDocument, runDocumentOcr, updateDocument } from "@/services/documents.service";
 
-// Der Upload selbst läuft über den Route Handler /api/belege (multipart).
+// Der Upload selbst läuft über den Route Handler /api/dokumente (multipart).
 
-export async function updateReceiptAction(
-  receiptId: number,
+export async function updateDocumentAction(
+  documentId: number,
   formData: FormData,
 ): Promise<ActionState> {
   return runAction(async () => {
     const actor = await requireActor();
-    await updateReceipt(actor, parseId(receiptId), receiptMetaSchema.parse(formToObject(formData)));
+    const meta = documentMetaSchema.parse(formToObject(formData, ["costIds"]));
+    await updateDocument(actor, parseId(documentId), parseId(formData.get("periodId")), meta);
     revalidatePath("/", "layout");
   });
 }
 
-export async function deleteReceiptAction(receiptId: number): Promise<ActionState> {
+export async function deleteDocumentAction(documentId: number): Promise<ActionState> {
   return runAction(async () => {
     const actor = await requireActor();
-    await deleteReceipt(actor, parseId(receiptId));
+    await deleteDocument(actor, parseId(documentId));
     revalidatePath("/", "layout");
   });
 }
 
-export async function runReceiptOcrAction(receiptId: number): Promise<ActionState> {
+export async function runDocumentOcrAction(documentId: number): Promise<ActionState> {
   return runAction(async () => {
     const actor = await requireActor();
-    await runReceiptOcr(actor, parseId(receiptId));
+    await runDocumentOcr(actor, parseId(documentId));
     revalidatePath("/", "layout");
   });
 }

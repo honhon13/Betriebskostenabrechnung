@@ -2,6 +2,7 @@
 
 import {
   Building2,
+  Files,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -27,6 +28,7 @@ const MAIN_NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/abrechnung", label: "Abrechnung", icon: ReceiptText },
   { href: "/einzahlungen", label: "Einzahlungen", icon: Wallet },
+  { href: "/dokumente", label: "Dokumente", icon: Files },
 ];
 
 const SETTINGS_NAV: NavItem = { href: "/einstellungen", label: "Einstellungen", icon: Settings };
