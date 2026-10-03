@@ -1,8 +1,8 @@
 "use client";
 
-import { LoaderCircle, ScanText, Upload } from "lucide-react";
+import { CircleCheck, CircleX, LoaderCircle, ScanText, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useTransition, type SubmitEvent } from "react";
+import { useRef, useState, useTransition, type SubmitEvent } from "react";
 
 import { updateDocumentAction } from "@/app/actions/documents";
 import { Alert } from "@/components/ui/alert";
@@ -18,7 +18,7 @@ import { Dialog } from "../forms/dialog";
 import { FieldErrorsContext } from "../forms/field";
 import { DocumentFields, type DocumentFormOptions } from "./document-fields";
 
-interface DocumentUploadProps extends DocumentFormOptions {
+export interface DocumentUploadProps extends DocumentFormOptions {
   defaultPeriodId: number;
   lockPeriod?: boolean;
   /** OCR ist eingerichtet und der Benutzer darf sie nutzen. */
@@ -27,139 +27,225 @@ interface DocumentUploadProps extends DocumentFormOptions {
   submission?: boolean;
 }
 
+interface DocumentUploadDialogProps extends DocumentUploadProps {
+  /** Wird beim Schließen aufgerufen – mit der Zahl der in diesem Dialog gespeicherten Dokumente. */
+  onClose: (uploaded: number) => void;
+}
+
 /** Antwort von POST /api/dokumente. */
 interface UploadResponse {
   document: DocumentDto;
   ocr: OcrOutcome | null;
 }
 
-type Status = { tone: "success" | "danger"; message: string } | null;
+/** Ergebnis je Datei – die Liste bleibt stehen, solange der Dialog offen ist. */
+interface UploadEntry {
+  fileName: string;
+  ok: boolean;
+  /** Fehlermeldung bzw. Hinweis zum gespeicherten Dokument. */
+  note?: string;
+}
 
-/** Schaltfläche, die das Upload-Formular in einem Dialog öffnet. */
-export function DocumentUploadDialog(props: DocumentUploadProps) {
-  const [open, setOpen] = useState(false);
+/** Angaben, die zu genau einem Dokument gehören – bei mehreren Dateien füllt sie die OCR je Dokument. */
+const SINGLE_DOCUMENT_FIELDS = [
+  "supplier",
+  "invoiceNumber",
+  "documentDate",
+  "servicePeriodStart",
+  "servicePeriodEnd",
+  "netAmount",
+  "taxAmount",
+  "amount",
+];
+
+/**
+ * Upload-Dialog für Dokumente. Er bleibt nach jedem Upload offen, damit sich beliebig viele
+ * Dokumente nacheinander – oder mehrere Dateien auf einmal – hochladen lassen.
+ */
+export function DocumentUploadDialog({ onClose, ...props }: DocumentUploadDialogProps) {
   // Nach einem Upload mit OCR: das gespeicherte Dokument zum Prüfen und Ergänzen.
   const [review, setReview] = useState<UploadResponse | null>(null);
-
-  function close() {
-    setOpen(false);
-    setReview(null);
-  }
+  const [entries, setEntries] = useState<UploadEntry[]>([]);
+  const uploaded = entries.filter((entry) => entry.ok).length;
+  const scroller = useRef<HTMLDivElement>(null);
 
   return (
-    <>
-      <Button onClick={() => setOpen(true)} variant={props.submission ? "secondary" : "primary"}>
-        <Upload aria-hidden />
-        {props.submission ? "Dokument einreichen" : "Dokument hochladen"}
-      </Button>
-      {open ? (
-        <Dialog
-          title={
-            review
-              ? "Erkannte Daten prüfen"
-              : props.submission
-                ? "Dokument einreichen"
-                : "Dokument hochladen"
-          }
-          description={
-            review
-              ? review.document.fileName
-              : props.submission
-                ? "Das Dokument zählt erst nach der Freigabe durch die Verwaltung."
-                : "Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen."
-          }
-          onClose={close}
-        >
-          {/* key: beim Wechsel zum Prüfschritt beginnt der Bereich wieder oben statt an der alten Scrollposition. */}
-          <div key={review ? "review" : "upload"} className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            {review ? (
-              <DocumentReview {...props} result={review} onDone={close} />
-            ) : (
-              <DocumentUpload {...props} onProcessed={setReview} />
-            )}
-          </div>
-        </Dialog>
-      ) : null}
-    </>
+    <Dialog
+      title={
+        review
+          ? "Erkannte Daten prüfen"
+          : props.submission
+            ? "Dokument einreichen"
+            : "Dokument hochladen"
+      }
+      description={
+        review
+          ? review.document.fileName
+          : props.submission
+            ? "Das Dokument zählt erst nach der Freigabe durch die Verwaltung."
+            : "Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen."
+      }
+      onClose={() => onClose(uploaded)}
+    >
+      {/* key: beim Wechsel zum Prüfschritt beginnt der Bereich wieder oben statt an der alten Scrollposition. */}
+      <div
+        ref={scroller}
+        key={review ? "review" : "upload"}
+        className="min-h-0 flex-1 overflow-y-auto px-5 py-4"
+      >
+        {review ? (
+          <DocumentReview {...props} result={review} onDone={() => setReview(null)} />
+        ) : (
+          <DocumentUpload
+            {...props}
+            entries={entries}
+            onUploaded={(added) => {
+              setEntries((current) => [...current, ...added]);
+              // Das Ergebnis steht oben – ohne Zurückscrollen bliebe der Blick am Ende des Formulars.
+              scroller.current?.scrollTo({ top: 0 });
+            }}
+            onProcessed={setReview}
+            onFinish={() => onClose(uploaded)}
+          />
+        )}
+      </div>
+    </Dialog>
   );
 }
 
-/** Upload-Formular für Dokumente. Die Datei geht per multipart an /api/dokumente. */
+/** Upload-Formular für Dokumente. Jede Datei geht als eigene multipart-Anfrage an /api/dokumente. */
 function DocumentUpload({
+  entries,
+  onUploaded,
   onProcessed,
+  onFinish,
   ocrAvailable,
   ...fields
-}: DocumentUploadProps & { onProcessed: (result: UploadResponse) => void }) {
+}: DocumentUploadProps & {
+  entries: UploadEntry[];
+  onUploaded: (entries: UploadEntry[]) => void;
+  onProcessed: (result: UploadResponse) => void;
+  onFinish: () => void;
+}) {
   const router = useRouter();
-  const [status, setStatus] = useState<Status>(null);
+  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [useOcr, setUseOcr] = useState(ocrAvailable);
-  // Nach erfolgreichem Upload ohne OCR entstehen die Felder neu (leer, mit Standardwerten) –
-  // der Dialog bleibt offen, damit sich mehrere Dokumente nacheinander hochladen lassen.
+  // Ab zwei gewählten Dateien gelten die Angaben für alle; Rechnungsdaten gibt es dann je Dokument.
+  const [selectedCount, setSelectedCount] = useState(0);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  // Nach einem Upload entstehen die Felder neu (leer, mit Standardwerten) – der Dialog bleibt
+  // offen, damit sich beliebig viele Dokumente nacheinander hochladen lassen.
   const [formKey, setFormKey] = useState(0);
+  const several = selectedCount > 1;
+
+  /** Lädt eine Datei hoch. Fehler kommen als Text zurück, damit die übrigen Dateien weiterlaufen. */
+  async function upload(base: FormData, selected: File): Promise<UploadResponse | string> {
+    try {
+      const file = await shrinkImage(selected, MAX_UPLOAD_BYTES);
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return `Die Datei ist größer als ${formatFileSize(MAX_UPLOAD_BYTES)}.`;
+      }
+      const formData = new FormData();
+      for (const [name, value] of base.entries()) {
+        if (name !== "file") formData.append(name, value);
+      }
+      formData.set("file", file);
+
+      const response = await fetch("/api/dokumente", { method: "POST", body: formData });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        return body?.error ?? "Der Upload ist fehlgeschlagen. Bitte versuche es erneut.";
+      }
+      return (await response.json()) as UploadResponse;
+    } catch {
+      return "Keine Verbindung zum Server. Bitte erneut versuchen.";
+    }
+  }
 
   function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const selected = formData.get("file");
+    const files = formData
+      .getAll("file")
+      .filter((value): value is File => value instanceof File && value.size > 0);
 
-    if (!(selected instanceof File) || selected.size === 0) {
-      setStatus({ tone: "danger", message: "Bitte eine Datei auswählen." });
+    if (files.length === 0) {
+      setError("Bitte eine Datei auswählen.");
       return;
+    }
+    setError(null);
+    // Rechnungsnummer, Datum und Beträge gehören zu einem einzelnen Dokument.
+    if (files.length > 1) {
+      for (const name of SINGLE_DOCUMENT_FIELDS) formData.delete(name);
     }
 
     startTransition(async () => {
-      try {
-        const file = await shrinkImage(selected, MAX_UPLOAD_BYTES);
-        if (file.size > MAX_UPLOAD_BYTES) {
-          setStatus({
-            tone: "danger",
-            message: `Die Datei ist größer als ${formatFileSize(MAX_UPLOAD_BYTES)}.`,
-          });
-          return;
+      const results: UploadEntry[] = [];
+      let last: UploadResponse | null = null;
+      // Nacheinander statt gleichzeitig: jede Datei ist eine eigene Anfrage mit eigener OCR.
+      for (const [index, file] of files.entries()) {
+        if (files.length > 1) setProgress({ current: index + 1, total: files.length });
+        const result = await upload(formData, file);
+        if (typeof result === "string") {
+          results.push({ fileName: file.name, ok: false, note: result });
+          continue;
         }
-        formData.set("file", file);
-
-        const response = await fetch("/api/dokumente", { method: "POST", body: formData });
-        if (!response.ok) {
-          const body = (await response.json().catch(() => null)) as { error?: string } | null;
-          setStatus({
-            tone: "danger",
-            message: body?.error ?? "Der Upload ist fehlgeschlagen. Bitte versuche es erneut.",
-          });
-          return;
-        }
-
-        const result = (await response.json()) as UploadResponse;
-        router.refresh();
-        if (result.ocr) {
-          // Die OCR ist gelaufen: erkannte Werte im Formular zeigen, prüfen und ergänzen lassen.
-          onProcessed(result);
-          return;
-        }
-        setFormKey((key) => key + 1);
-        setStatus({
-          tone: "success",
-          message: fields.submission
-            ? `„${selected.name}“ wurde eingereicht und wartet auf Prüfung.`
-            : `„${selected.name}“ wurde hochgeladen.`,
+        last = result;
+        results.push({
+          fileName: result.document.fileName,
+          ok: true,
+          note:
+            result.ocr?.status === "failed"
+              ? `Gespeichert – OCR-Fehler: ${result.ocr.error ?? "nicht ausgelesen"}`
+              : fields.submission
+                ? "Eingereicht, wartet auf Prüfung"
+                : undefined,
         });
-      } catch {
-        setStatus({ tone: "danger", message: "Keine Verbindung zum Server. Bitte erneut versuchen." });
       }
+      setProgress(null);
+      onUploaded(results);
+      if (results.some((entry) => entry.ok)) router.refresh();
+
+      // Scheitert ein einzelnes Dokument, bleiben die Eingaben für den nächsten Versuch stehen.
+      if (files.length === 1 && !last) return;
+      setFormKey((key) => key + 1);
+      setSelectedCount(0);
+      // Ein einzelnes, ausgelesenes Dokument: erkannte Werte zeigen, prüfen und ergänzen lassen.
+      if (files.length === 1 && last?.ocr) onProcessed(last);
     });
   }
 
   return (
     <form key={formKey} onSubmit={handleSubmit} className="space-y-4">
+      {entries.length > 0 ? <UploadLog entries={entries} submission={fields.submission} /> : null}
+
       <label className="block space-y-1.5">
-        <span className="text-sm font-medium">Datei</span>
-        <input type="file" name="file" accept={UPLOAD_ACCEPT} required className={fileInputClass} />
+        <span className="text-sm font-medium">
+          {entries.length > 0 ? "Weitere Dateien" : "Dateien"}
+        </span>
+        <input
+          type="file"
+          name="file"
+          accept={UPLOAD_ACCEPT}
+          multiple
+          required
+          className={fileInputClass}
+          onChange={(event) => setSelectedCount(event.target.files?.length ?? 0)}
+        />
         <span className="block text-xs text-subtle">
-          PDF oder Foto (JPEG, PNG, WebP, HEIC, TIFF) bis {formatFileSize(MAX_UPLOAD_BYTES)}. Größere
-          Fotos werden automatisch verkleinert.
+          PDF oder Foto (JPEG, PNG, WebP, HEIC, TIFF) bis {formatFileSize(MAX_UPLOAD_BYTES)} je
+          Datei – auch mehrere auf einmal. Größere Fotos werden automatisch verkleinert.
         </span>
       </label>
+
+      {several ? (
+        <Alert tone="info" title={`${selectedCount} Dateien gewählt`}>
+          Typ, Abrechnungsjahr und Verknüpfungen gelten für alle Dateien. Rechnungsdaten
+          {useOcr ? " erkennt die OCR je Dokument; du kannst sie" : " kannst du"} danach in der
+          Liste ergänzen.
+        </Alert>
+      ) : null}
 
       {ocrAvailable ? (
         <div className="rounded-lg border border-border bg-surface-muted px-3 py-2.5 text-sm">
@@ -183,17 +269,24 @@ function DocumentUpload({
 
       {/* Feldfehler kommen hier nicht einzeln zurück – die Meldung steht unter dem Formular. */}
       <FieldErrorsContext value={{}}>
-        <DocumentFields {...fields} />
+        <DocumentFields {...fields} hideInvoiceData={several} />
       </FieldErrorsContext>
 
-      {status ? <Alert tone={status.tone} title={status.message} /> : null}
-      {pending && useOcr ? (
+      {error ? <Alert tone="danger" title={error} /> : null}
+      {pending ? (
         <p className="text-right text-xs text-muted" role="status">
-          Dokument wird gespeichert und ausgelesen – das dauert einige Sekunden.
+          {progress
+            ? `Dokument ${progress.current} von ${progress.total} wird gespeichert${useOcr ? " und ausgelesen" : ""} …`
+            : useOcr
+              ? "Dokument wird gespeichert und ausgelesen – das dauert einige Sekunden."
+              : "Dokument wird gespeichert …"}
         </p>
       ) : null}
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button variant="secondary" onClick={onFinish} disabled={pending}>
+          {entries.length > 0 ? "Fertig" : "Abbrechen"}
+        </Button>
         <Button type="submit" disabled={pending}>
           {pending ? (
             <LoaderCircle className="animate-spin" aria-hidden />
@@ -202,10 +295,45 @@ function DocumentUpload({
           ) : (
             <Upload aria-hidden />
           )}
-          {useOcr ? "Hochladen und auslesen" : "Hochladen"}
+          {several ? `${selectedCount} Dokumente hochladen` : "Hochladen"}
+          {useOcr ? " und auslesen" : ""}
         </Button>
       </div>
     </form>
+  );
+}
+
+/** Was in diesem Dialog bereits hochgeladen wurde – und was nicht geklappt hat. */
+function UploadLog({ entries, submission }: { entries: UploadEntry[]; submission?: boolean }) {
+  const saved = entries.filter((entry) => entry.ok).length;
+  const failed = entries.length - saved;
+  const verb = submission ? "eingereicht" : "hochgeladen";
+
+  return (
+    <div className="rounded-lg border border-border" role="status">
+      <p className="border-b border-border px-3 py-2 text-sm font-medium">
+        {saved === 1 ? `1 Dokument ${verb}` : `${saved} Dokumente ${verb}`}
+        {failed > 0 ? ` · ${failed} nicht gespeichert` : ""}
+      </p>
+      <ul className="max-h-40 divide-y divide-border overflow-y-auto text-sm">
+        {entries.map((entry, index) => (
+          <li key={index} className="flex items-start gap-2 px-3 py-2">
+            {entry.ok ? (
+              <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />
+            ) : (
+              <CircleX className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden />
+            )}
+            <span className="min-w-0">
+              <span className="block font-medium wrap-anywhere">
+                <span className="sr-only">{entry.ok ? "Gespeichert: " : "Nicht gespeichert: "}</span>
+                {entry.fileName}
+              </span>
+              {entry.note ? <span className="block text-muted">{entry.note}</span> : null}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -237,6 +365,7 @@ function OcrSummary({ ocr }: { ocr: OcrOutcome }) {
 /**
  * Zweiter Schritt nach einem Upload mit OCR: das Dokument ist gespeichert, die erkannten
  * Werte stehen in den Formularfeldern und lassen sich prüfen, korrigieren und ergänzen.
+ * Danach geht es zurück zum Upload – für das nächste Dokument.
  */
 function DocumentReview({
   result,

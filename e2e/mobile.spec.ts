@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { CURRENT_YEAR, RELEASED_YEAR, expectNoHorizontalOverflow, login } from "./helpers";
+import { CURRENT_YEAR, RELEASED_YEAR, expectNoHorizontalOverflow, login, openAdd } from "./helpers";
 
 test.describe("Mobil", () => {
   test("Navigation ist eingeklappt und lässt sich öffnen", async ({ page }) => {
@@ -46,9 +46,11 @@ test.describe("Mobil", () => {
   test("Formulardialog ist auf dem Handy bedienbar", async ({ page }) => {
     await login(page, "top2");
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
-    await page.getByRole("button", { name: "Kosten erfassen" }).click();
-    const dialog = page.getByRole("dialog");
+    // „Hinzufügen“ liegt im sichtbaren Bereich; die Auswahl kommt als Sheet von unten.
+    await expect(page.getByRole("button", { name: "Hinzufügen", exact: true })).toBeInViewport();
+    const dialog = await openAdd(page, "Kostenposition hinzufügen");
     await expect(dialog.getByLabel("Beschreibung")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
 
     // Speichern und Abbrechen müssen ohne Scrollen im sichtbaren Bereich liegen.
     const save = dialog.getByRole("button", { name: "Speichern" });

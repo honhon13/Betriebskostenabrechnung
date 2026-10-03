@@ -1,6 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, RELEASED_YEAR, login, tinyPdf } from "./helpers";
+import {
+  CURRENT_YEAR,
+  expectSubmitOnlyMenu,
+  login,
+  RELEASED_YEAR,
+  tinyPdf,
+} from "./helpers";
 
 test.describe.serial("USER (TOP 1 / TOP 3)", () => {
   let page: Page;
@@ -63,9 +69,10 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
     await expect(page.locator("details")).toHaveCount(1);
     await expect(page.getByRole("main").getByText(/TOP [23]/)).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Kostenverteilung" })).toHaveCount(0);
-    for (const name of ["Freigeben", "Freigabe zurücknehmen", "Neues Jahr"]) {
+    for (const name of ["Freigeben", "Freigabe zurücknehmen"]) {
       await expect(page.getByRole("button", { name })).toHaveCount(0);
     }
+    await expectSubmitOnlyMenu(page);
   });
 
   test("Jahres- und Monatsübersicht zeigen nur die eigene TOP", async () => {
@@ -73,7 +80,7 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
     await expect(page.getByRole("columnheader", { name: "Mein Kostenanteil" })).toBeVisible();
     await expect(page.getByRole("row").filter({ hasText: String(RELEASED_YEAR) })).toBeVisible();
     await expect(page.getByRole("row").filter({ hasText: String(CURRENT_YEAR) })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Neues Jahr" })).toHaveCount(0);
+    await expectSubmitOnlyMenu(page);
 
     // ?top=2 wird ignoriert – es bleibt die eigene TOP.
     await page.goto(`/abrechnung/${RELEASED_YEAR}/monate?top=2`);
@@ -81,11 +88,10 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
     await expect(page.getByLabel("TOP", { exact: true })).toHaveCount(0);
   });
 
-  test("Dokumente: kein direkter Upload – Einreichen führt zu „Meine Eingaben“", async () => {
+  test("Dokumente: kein direkter Upload – „Hinzufügen“ bietet nur das Einreichen", async () => {
     await page.goto("/dokumente");
     await expect(page.getByText("Dokumente, die deine TOP betreffen.")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Dokument hochladen" })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Dokument einreichen" })).toHaveAttribute("href", "/eingaben");
+    await expectSubmitOnlyMenu(page);
     await expect(page.getByLabel("TOP", { exact: true })).toHaveCount(0);
   });
 
@@ -96,7 +102,7 @@ test.describe.serial("USER (TOP 1 / TOP 3)", () => {
     await expect(table.getByText("TOP 2")).toHaveCount(0);
     await expect(table.getByText("TOP 3")).toHaveCount(0);
     await expect(table.getByText(String(CURRENT_YEAR), { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Einzahlung erfassen" })).toHaveCount(0);
+    await expectSubmitOnlyMenu(page);
     await expect(page.getByRole("button", { name: /löschen/ })).toHaveCount(0);
   });
 

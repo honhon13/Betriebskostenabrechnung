@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { deletePeriodAction, setPeriodStatusAction } from "@/app/actions/billing";
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
-import { NewPeriodDialog } from "@/components/billing/new-period-dialog";
+import { AddButton } from "@/components/add/add-button";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { Tabs, type TabItem } from "@/components/layout/tabs";
@@ -82,7 +82,7 @@ export default async function BillingYearLayout({
                 </>
               )
             }
-            triggerVariant={released ? "secondary" : "primary"}
+            triggerVariant="secondary"
             triggerSize="md"
             title={released ? "Freigabe zurücknehmen?" : `Abrechnung ${period.year} freigeben?`}
             description={
@@ -93,9 +93,6 @@ export default async function BillingYearLayout({
             confirmLabel={released ? "Zurücknehmen" : "Freigeben"}
             action={setPeriodStatusAction.bind(null, period.id, released ? "draft" : "released")}
           />
-        ) : null}
-        {can(user, "period:write") ? (
-          <NewPeriodDialog suggestedYear={Math.max(...periods.map((p) => p.year)) + 1} />
         ) : null}
         {can(user, "period:delete") ? (
           <ConfirmAction
@@ -108,6 +105,7 @@ export default async function BillingYearLayout({
             action={deletePeriodAction.bind(null, period.id)}
           />
         ) : null}
+        <AddButton user={user} area="billing" period={period} />
       </PageHeader>
 
       <Tabs items={tabs} label="Bereiche der Abrechnung" />

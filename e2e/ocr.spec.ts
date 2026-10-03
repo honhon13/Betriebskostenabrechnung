@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, login, tinyPdf } from "./helpers";
+import { CURRENT_YEAR, login, openAdd, tinyPdf } from "./helpers";
 
 // OCR läuft gegen den Azure-Nachbau (e2e/mock-azure.mjs). Eine Marke im Dokument
 // bestimmt, was der Dienst „erkennt“.
@@ -28,10 +28,16 @@ const pdf = (name: string, marker: string) => ({
 
 async function openUpload(page: Page): Promise<Locator> {
   await page.goto(`/dokumente?q=${RUN}`);
-  await page.getByRole("button", { name: "Dokument hochladen" }).click();
-  const dialog = page.getByRole("dialog");
+  const dialog = await openAdd(page, "Dokument hochladen");
   await dialog.locator('select[name="periodId"]').selectOption({ label: String(CURRENT_YEAR) });
   return dialog;
+}
+
+/** Nach dem Prüfschritt steht der Dialog wieder beim Upload – „Fertig“ schließt ihn. */
+async function finish(dialog: Locator): Promise<void> {
+  await expect(dialog.getByRole("heading", { name: "Dokument hochladen" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Fertig" }).click();
+  await expect(dialog).toBeHidden();
 }
 
 test.describe.serial("Dokument-Upload mit OCR", () => {
@@ -72,7 +78,9 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await dialog.locator('select[name="unitId"]').selectOption({ label: "TOP 1" });
     await dialog.getByLabel("Rechnungsnummer").fill("RE-2026-0042-K");
     await dialog.getByRole("button", { name: "Speichern" }).click();
-    await expect(dialog).toBeHidden();
+    // Der Dialog bleibt für das nächste Dokument offen und führt Buch über das Hochgeladene.
+    await expect(dialog.getByRole("status").filter({ hasText: "1 Dokument hochgeladen" })).toContainText(INVOICE);
+    await finish(dialog);
 
     const documentRow = row(page, INVOICE);
     await expect(documentRow).toContainText("Rauchfangkehrer Muster GmbH · Nr. RE-2026-0042-K");
@@ -116,6 +124,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("Mein eigener Eintrag");
     await expect(dialog.getByLabel("Rechnungsnummer")).toHaveValue("RE-2026-0042");
     await dialog.getByRole("button", { name: "Später ergänzen" }).click();
+    await finish(dialog);
     await expect(row(page, OWN_VALUES)).toContainText("Mein eigener Eintrag · Nr. RE-2026-0042");
   });
 
@@ -132,7 +141,8 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await expect(dialog.getByLabel("Brutto (€)")).toHaveValue("");
     await dialog.getByLabel("Rechnungssteller").fill("Von Hand ergänzt");
     await dialog.getByRole("button", { name: "Speichern" }).click();
-    await expect(dialog).toBeHidden();
+    await expect(dialog.getByRole("status").filter({ hasText: UNREADABLE })).toContainText("OCR-Fehler");
+    await finish(dialog);
 
     const documentRow = row(page, UNREADABLE);
     await expect(documentRow).toContainText("Von Hand ergänzt");
@@ -159,6 +169,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
       "WebP-Dateien können nicht per OCR ausgelesen werden.",
     );
     await dialog.getByRole("button", { name: "Später ergänzen" }).click();
+    await finish(dialog);
     await expect(row(page, WEBP)).toContainText("Fehler");
   });
 
@@ -170,6 +181,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await expect(dialog.getByText("OCR verarbeitet – keine Daten übernommen")).toBeVisible();
     await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("");
     await dialog.getByRole("button", { name: "Später ergänzen" }).click();
+    await finish(dialog);
     await expect(row(page, PLAIN)).toContainText("Verarbeitet");
   });
 
@@ -178,10 +190,9 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await dialog.getByRole("checkbox", { name: /Automatisch per OCR auslesen/ }).uncheck();
     await dialog.locator('input[type="file"]').setInputFiles(pdf(MANUAL, "OCR-RECHNUNG"));
     await dialog.getByRole("button", { name: "Hochladen", exact: true }).click();
-    await expect(dialog.getByText(`„${MANUAL}“ wurde hochgeladen.`)).toBeVisible();
+    await expect(dialog.getByRole("status").filter({ hasText: "1 Dokument hochgeladen" })).toContainText(MANUAL);
     // Kein Prüfschritt: das Formular ist wieder leer und bereit für das nächste Dokument.
-    await expect(dialog.getByRole("heading", { name: "Dokument hochladen" })).toBeVisible();
-    await dialog.getByRole("button", { name: "Schließen" }).click();
+    await finish(dialog);
 
     const documentRow = row(page, MANUAL);
     await expect(documentRow).toContainText("Offen");
@@ -211,8 +222,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
 
   test("Kostenformular: angehängter Beleg wird ausgelesen und ergänzt leere Felder", async () => {
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
-    await page.getByRole("button", { name: "Kosten erfassen" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openAdd(page, "Kostenposition hinzufügen");
     await expect(dialog.getByText("automatisch per OCR ausgelesen")).toBeVisible();
     await dialog.getByLabel("Beschreibung").fill(COST);
     await dialog.getByLabel("Betrag (€)").fill("214,80");
@@ -240,8 +250,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
 
   test("Einzahlungsformular: angehängter Nachweis wird ausgelesen", async () => {
     await page.goto(`/einzahlungen?jahr=${CURRENT_YEAR}&top=3`);
-    await page.getByRole("button", { name: "Einzahlung erfassen" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openAdd(page, "Einzahlung hinzufügen");
     await expect(dialog.getByText("wird automatisch per OCR ausgelesen")).toBeVisible();
     await dialog.getByLabel("Betrag (€)").fill("55,55");
     await dialog.locator('select[name="unitId"]').selectOption({ label: "TOP 3" });

@@ -1,6 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, RELEASED_YEAR, login, parseCents, tinyPdf } from "./helpers";
+import {
+  CURRENT_YEAR,
+  expectSubmitOnlyMenu,
+  login,
+  openAdd,
+  parseCents,
+  RELEASED_YEAR,
+  tinyPdf,
+} from "./helpers";
 
 // Eindeutige Namen je Lauf, damit sich die Tests selbst wieder aufräumen können.
 const RUN = Date.now().toString(36);
@@ -124,13 +132,17 @@ test.describe.serial("ADMIN (TOP 2)", () => {
   test("freigegebene Abrechnung ist gegen Änderungen gesperrt", async () => {
     await page.goto(`/abrechnung/${RELEASED_YEAR}/kosten`);
     await expect(page.getByText("Diese Abrechnung ist freigegeben")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Kosten erfassen" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /bearbeiten$/ })).toHaveCount(0);
+    // Neue Kosten gehen nur in Jahre im Entwurf – das freigegebene Jahr steht nicht zur Wahl.
+    const dialog = await openAdd(page, "Kostenposition hinzufügen");
+    await expect(dialog.getByText(`Die Abrechnung ${RELEASED_YEAR} ist freigegeben`)).toBeVisible();
+    await expect(dialog.locator('select[name="periodId"] option')).toHaveText([String(CURRENT_YEAR)]);
+    await dialog.getByRole("button", { name: "Abbrechen" }).click();
   });
 
   test("Kosten erfassen – mit Validierung und Beleg", async () => {
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
-    await page.getByRole("button", { name: "Kosten erfassen" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openAdd(page, "Kostenposition hinzufügen");
 
     await dialog.getByLabel("Beschreibung").fill(COST);
     await dialog.getByLabel("Betrag (€)").fill("kein betrag");
@@ -181,8 +193,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
 
   test("Dokument hochladen: Typ, Beschreibung, Kostenposition und TOP", async () => {
     await page.goto("/dokumente");
-    await page.getByRole("button", { name: "Dokument hochladen" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openAdd(page, "Dokument hochladen");
     await dialog.locator('input[type="file"]').setInputFiles(pdf(FILE));
     await dialog.getByLabel("Dokumenttyp").selectOption({ label: "Vertrag" });
     await dialog.locator('select[name="periodId"]').selectOption({ label: String(CURRENT_YEAR) });
@@ -266,7 +277,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
 
   test("Upload lehnt doppelte und unerlaubte Dateien ab", async () => {
     await page.goto(`/einzahlungen?jahr=${CURRENT_YEAR}`);
-    await page.getByRole("button", { name: "Einzahlung erfassen" }).click();
+    await openAdd(page, "Einzahlung hinzufügen");
     // Die Perioden-ID steckt im Formular der Seite.
     const periodId = await page
       .getByRole("dialog")
@@ -295,8 +306,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     const card = page.locator("div").filter({ hasText: /^TOP 3/ }).first();
     const paidBefore = parseCents(await card.locator("dd").first().innerText());
 
-    await page.getByRole("button", { name: "Einzahlung erfassen" }).click();
-    const dialog = page.getByRole("dialog");
+    const dialog = await openAdd(page, "Einzahlung hinzufügen");
     await dialog.getByLabel("Betrag (€)").fill("1.234,56");
     await dialog.locator('select[name="unitId"]').selectOption({ label: "TOP 3" });
     await dialog.getByLabel("Beschreibung / Verwendungszweck").fill(PURPOSE);
@@ -391,8 +401,8 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     for (const id of Object.values(ids)) {
       expect((await top3.request.get(`/api/dokumente/${id}/datei`)).status()).toBe(200);
     }
-    // USER können nichts hochladen, bearbeiten oder löschen.
-    await expect(top3.getByRole("button", { name: "Dokument hochladen" })).toHaveCount(0);
+    // USER können nichts direkt hochladen, bearbeiten oder löschen.
+    await expectSubmitOnlyMenu(top3);
     await expect(top3.getByRole("button", { name: /bearbeiten|löschen/ })).toHaveCount(0);
 
     // TOP 1 ist an nichts davon beteiligt: nicht in der Liste, nicht per direkter URL.
@@ -418,9 +428,9 @@ test.describe.serial("ADMIN (TOP 2)", () => {
   test("Kosten mit Dokumenten lassen sich nicht in ein anderes Jahr verschieben", async () => {
     const nextYear = CURRENT_YEAR + 1;
     await page.goto(`/abrechnung/${CURRENT_YEAR}`);
-    await page.getByRole("button", { name: "Neues Jahr" }).click();
-    await expect(page.getByRole("dialog").getByLabel("Jahr")).toHaveValue(String(nextYear));
-    await page.getByRole("dialog").getByRole("button", { name: "Anlegen" }).click();
+    const yearDialog = await openAdd(page, "Abrechnungsjahr hinzufügen");
+    await expect(yearDialog.getByLabel("Jahr")).toHaveValue(String(nextYear));
+    await yearDialog.getByRole("button", { name: "Anlegen" }).click();
     await expect(page).toHaveURL(new RegExp(`/abrechnung/${nextYear}$`));
 
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);

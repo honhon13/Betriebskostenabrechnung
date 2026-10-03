@@ -4,8 +4,8 @@ import Link from "next/link";
 
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
+import { AddButton } from "@/components/add/add-button";
 import { BalanceBadge } from "@/components/billing/balance-badge";
-import { NewPeriodDialog } from "@/components/billing/new-period-dialog";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -24,8 +24,6 @@ export default async function BillingIndexPage() {
   const years = await getYearOverview(user);
   const own = !getDataScope(user).allUnits;
   const canCreate = can(user, "period:write");
-  const suggestedYear =
-    years.length > 0 ? Math.max(...years.map((y) => y.period.year)) + 1 : new Date().getFullYear();
 
   const yearLink = (summary: YearSummary) => (
     <Link
@@ -76,9 +74,7 @@ export default async function BillingIndexPage() {
             : "Jahresübersicht über alle Abrechnungsjahre."
         }
       >
-        {canCreate && years.length > 0 ? (
-          <NewPeriodDialog suggestedYear={suggestedYear} variant="primary" />
-        ) : null}
+        <AddButton user={user} area="billing" />
       </PageHeader>
 
       <Card>
@@ -88,12 +84,10 @@ export default async function BillingIndexPage() {
             title={canCreate ? "Noch kein Abrechnungsjahr" : "Noch keine freigegebene Abrechnung"}
             description={
               canCreate
-                ? "Lege das erste Abrechnungsjahr an, um Kosten, Umlageschlüssel und Dokumente zu erfassen."
+                ? "Lege über „Hinzufügen“ das erste Abrechnungsjahr an, um Kosten, Umlageschlüssel und Dokumente zu erfassen."
                 : "Sobald die Verwaltung eine Abrechnung freigibt, erscheint sie hier."
             }
-          >
-            {canCreate ? <NewPeriodDialog suggestedYear={suggestedYear} variant="primary" /> : null}
-          </EmptyState>
+          />
         ) : (
           <>
             <CardHeader

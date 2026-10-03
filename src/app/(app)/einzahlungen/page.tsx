@@ -1,13 +1,10 @@
-import { CircleCheck, CircleX, Clock, Pencil, Plus, Send, Trash2, Wallet } from "lucide-react";
+import { CircleCheck, CircleX, Clock, Pencil, Trash2, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 
-import {
-  createPaymentAction,
-  deletePaymentAction,
-  updatePaymentAction,
-} from "@/app/actions/payments";
+import { deletePaymentAction, updatePaymentAction } from "@/app/actions/payments";
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
+import { AddButton } from "@/components/add/add-button";
 import { BalanceBadge } from "@/components/billing/balance-badge";
 import { DocumentChips } from "@/components/documents/document-preview";
 import { ConfirmAction } from "@/components/forms/confirm-action";
@@ -16,12 +13,11 @@ import { NavSelect } from "@/components/layout/year-select";
 import { PaymentFields } from "@/components/payments/payment-fields";
 import { ReviewFlag } from "@/components/review/review-badge";
 import { Badge } from "@/components/ui/badge";
-import { ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
-import { formatCents, formatDate, todayIso } from "@/lib/format";
+import { formatCents, formatDate } from "@/lib/format";
 import { PAYMENT_STATUS_LABELS, PAYMENT_STATUSES } from "@/lib/labels";
 import { isOcrAvailable } from "@/services/documents.service";
 import { listUnits } from "@/services/masterdata.service";
@@ -184,37 +180,7 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
           ]}
           hrefPattern={href({ status: "{value}" })}
         />
-        {!canWrite && can(user, "payment:submit") ? (
-          <ButtonLink href="/eingaben" variant="secondary">
-            <Send aria-hidden />
-            Einzahlung einreichen
-          </ButtonLink>
-        ) : null}
-        {canWrite ? (
-          <FormDialog
-            trigger={
-              <>
-                <Plus aria-hidden />
-                Einzahlung erfassen
-              </>
-            }
-            triggerVariant="primary"
-            title="Einzahlung erfassen"
-            action={createPaymentAction}
-          >
-            <PaymentFields
-              periods={periods}
-              units={units}
-              defaults={{
-                periodId: (period ?? pickDefaultPeriod(periods))?.id,
-                unitId: unit?.id,
-                date: todayIso(),
-              }}
-              allowUpload={allowUpload}
-              ocrAvailable={ocrAvailable}
-            />
-          </FormDialog>
-        ) : null}
+        <AddButton user={user} area="payments" period={period} unitId={unit?.id} />
       </PageHeader>
 
       {period && balances.length > 0 ? (

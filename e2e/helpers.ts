@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export type SeedUser = "top1" | "top2" | "top3";
 
@@ -14,6 +14,29 @@ export async function login(page: Page, user: SeedUser): Promise<void> {
   await page.getByLabel("Passwort", { exact: true }).fill(passwordOf(user));
   await page.getByRole("button", { name: "Anmelden" }).click();
   await expect(page).toHaveURL(/\/dashboard/);
+}
+
+/**
+ * Öffnet „Hinzufügen“ oben rechts, wählt die Aktion (z. B. „Kostenposition hinzufügen“) und
+ * gibt den Dialog zurück, der sich daraufhin öffnet.
+ */
+export async function openAdd(page: Page, action: string): Promise<Locator> {
+  await page.getByRole("button", { name: "Hinzufügen", exact: true }).click();
+  // Der Name des Eintrags besteht aus Beschriftung und Erklärtext.
+  await page.getByRole("dialog").getByRole("button", { name: new RegExp(`^${action}`) }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Hinzufügen", exact: true })).toHaveCount(0);
+  return dialog;
+}
+
+/** USER legen nichts direkt an: „Hinzufügen“ bietet ihnen nur das Einreichen zur Prüfung. */
+export async function expectSubmitOnlyMenu(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Hinzufügen", exact: true }).click();
+  const menu = page.getByRole("dialog");
+  await expect(menu.getByRole("button", { name: /^Dokument einreichen/ })).toBeVisible();
+  await expect(menu.getByRole("button", { name: /hochladen|hinzufügen|anlegen/ })).toHaveCount(0);
+  await menu.getByRole("button", { name: "Schließen" }).click();
+  await expect(menu).toBeHidden();
 }
 
 /** "€ 1.234,56" → 123456 */

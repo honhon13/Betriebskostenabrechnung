@@ -1,4 +1,4 @@
-import { Download, Files, Pencil, ScanText, Search, Send, Trash2, X } from "lucide-react";
+import { Download, Files, Pencil, ScanText, Search, Trash2, X } from "lucide-react";
 import Link from "next/link";
 
 import {
@@ -27,7 +27,6 @@ import {
   type DocumentSort,
 } from "@/services/documents.service";
 import { listUnits } from "@/services/masterdata.service";
-import { pickDefaultPeriod } from "@/services/periods.service";
 import type { SessionUser } from "@/types/auth";
 import type { DocumentDto, OcrFields, PeriodDto } from "@/types/billing";
 
@@ -35,7 +34,6 @@ import { DocumentFields, type DocumentFormOptions } from "./document-fields";
 import { DocumentPreviewButton } from "./document-preview";
 import { OcrStatusBadge } from "./ocr-status";
 import { ReviewFlag } from "../review/review-badge";
-import { DocumentUploadDialog } from "./document-upload";
 
 const ALL = "alle";
 
@@ -84,8 +82,8 @@ interface DocumentManagerProps {
 
 /**
  * Dokumentenverwaltung: Suche, Filter, Sortierung, Vorschau, Download und – für die
- * Verwaltung – Upload, Bearbeiten, OCR und Löschen. Wird zentral unter /dokumente und
- * als Reiter je Abrechnungsjahr verwendet.
+ * Verwaltung – Bearbeiten, OCR und Löschen. Hochgeladen wird über „Hinzufügen“ im Seitenkopf.
+ * Wird zentral unter /dokumente und als Reiter je Abrechnungsjahr verwendet.
  */
 export async function DocumentManager({
   user,
@@ -121,7 +119,6 @@ export async function DocumentManager({
     units,
     ...linkOptions,
   };
-  const defaultPeriodId = (period ?? pickDefaultPeriod(periods))?.id;
   const filtered = Boolean(search || type || unit || (!lockedPeriod && period) || sort !== "newest");
 
   const costHref = (document: DocumentDto, costId: number) =>
@@ -253,21 +250,6 @@ export async function DocumentManager({
               ? `${documents.length} ${documents.length === 1 ? "Dokument" : "Dokumente"}${filtered ? " in dieser Auswahl" : ""}`
               : "Dokumente, die deine TOP betreffen."
           }
-          action={
-            canWrite && defaultPeriodId !== undefined ? (
-              <DocumentUploadDialog
-                {...formOptions}
-                defaultPeriodId={defaultPeriodId}
-                lockPeriod={Boolean(lockedPeriod)}
-                ocrAvailable={canOcr && ocrAvailable}
-              />
-            ) : !canWrite && can(user, "document:submit") ? (
-              <Link href="/eingaben" className={buttonClass("secondary", "md")}>
-                <Send aria-hidden />
-                Dokument einreichen
-              </Link>
-            ) : null
-          }
         />
 
         <FilterForm
@@ -351,7 +333,7 @@ export async function DocumentManager({
               filtered
                 ? "Für diese Suche bzw. Filter gibt es keine Dokumente."
                 : scope.allUnits
-                  ? "Lade Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen hoch."
+                  ? "Lade über „Hinzufügen“ Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen hoch."
                   : "Sobald die Verwaltung Dokumente für deine TOP bereitstellt, erscheinen sie hier."
             }
           />

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, RELEASED_YEAR, login, parseCents, tinyPdf } from "./helpers";
+import { CURRENT_YEAR, RELEASED_YEAR, login, openAdd, parseCents, tinyPdf } from "./helpers";
 
 // Prüf-Workflow: TOP 1 reicht ein, TOP 2 (ADMIN) prüft. Offiziell zählt nur Freigegebenes.
 const RUN = Date.now().toString(36);
@@ -59,8 +59,7 @@ test.describe.serial("Prüfung von USER-Eingaben", () => {
 
   test("USER reicht Kosten mit Beleg ein – Status „Ausstehende Prüfung“", async () => {
     await user.goto("/eingaben");
-    await user.getByRole("button", { name: "Kosten einreichen" }).click();
-    const dialog = user.getByRole("dialog");
+    const dialog = await openAdd(user, "Kosten einreichen");
     // Umlageschlüssel und TOP-Zuordnung sind Sache der Verwaltung.
     await expect(dialog.locator('select[name="allocationKeyId"]')).toHaveCount(0);
     await expect(dialog.locator('input[name="unitIds"]')).toHaveCount(0);
@@ -78,8 +77,7 @@ test.describe.serial("Prüfung von USER-Eingaben", () => {
   });
 
   test("USER reicht Einzahlung, Dokument und Abrechnungsjahr ein", async () => {
-    await user.getByRole("button", { name: "Einzahlung einreichen" }).click();
-    let dialog = user.getByRole("dialog");
+    let dialog = await openAdd(user, "Einzahlung einreichen");
     await expect(dialog.getByText("Für TOP 1.")).toBeVisible();
     await dialog.getByLabel("Betrag (€)").fill("77,77");
     await dialog.getByLabel("Beschreibung / Verwendungszweck").fill(PURPOSE);
@@ -88,20 +86,19 @@ test.describe.serial("Prüfung von USER-Eingaben", () => {
     await expect(dialog).toBeHidden();
     await expect(row(user, PURPOSE)).toContainText("Ausstehende Prüfung");
 
-    await user.getByRole("button", { name: "Dokument einreichen" }).click();
-    dialog = user.getByRole("dialog");
+    dialog = await openAdd(user, "Dokument einreichen");
     await dialog.locator('input[type="file"]').setInputFiles(pdf(DOCUMENT));
     await dialog.getByLabel("Dokumenttyp").selectOption({ label: "Vertrag" });
     // Verknüpfen lässt sich nur mit eigenen Kostenpositionen.
     await dialog.getByRole("checkbox", { name: new RegExp(COST) }).check();
     await expect(dialog.getByRole("checkbox")).toHaveCount(1);
     await dialog.getByRole("button", { name: "Hochladen" }).click();
-    await expect(dialog.getByText("wurde eingereicht und wartet auf Prüfung")).toBeVisible();
-    await dialog.getByRole("button", { name: "Schließen" }).click();
+    const log = dialog.getByRole("status").filter({ hasText: "1 Dokument eingereicht" });
+    await expect(log).toContainText("wartet auf Prüfung");
+    await dialog.getByRole("button", { name: "Fertig" }).click();
     await expect(row(user, DOCUMENT)).toContainText("Ausstehende Prüfung");
 
-    await user.getByRole("button", { name: "Jahr vorschlagen" }).click();
-    dialog = user.getByRole("dialog");
+    dialog = await openAdd(user, "Abrechnungsjahr vorschlagen");
     await dialog.getByLabel("Jahr").fill(String(PROPOSED_YEAR));
     await dialog.getByRole("button", { name: "Einreichen" }).click();
     await expect(dialog).toBeHidden();

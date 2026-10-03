@@ -12,6 +12,9 @@ const PORT = Number(process.env.E2E_PORT ?? 3100);
 // es werden keine echten Zugangsdaten gebraucht und keine Dokumente an Azure geschickt.
 const MOCK_AZURE_PORT = PORT + 1;
 const MOCK_AZURE_KEY = "e2e-test-key";
+// Standard ist das mit Playwright installierte Chromium (`npx playwright install chromium`).
+// PW_CHANNEL=chrome nimmt stattdessen ein auf dem Rechner installiertes Google Chrome.
+const BROWSER = process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {};
 
 /**
  * End-to-End-Tests gegen den Produktions-Build. Sie schreiben in die Datenbank aus
@@ -36,12 +39,12 @@ export default defineConfig({
     {
       name: "desktop",
       testIgnore: /mobile\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"], channel: "chrome" },
+      use: { ...devices["Desktop Chrome"], ...BROWSER },
     },
     {
       name: "mobile",
       testMatch: /mobile\.spec\.ts/,
-      use: { ...devices["Pixel 7"], channel: "chrome" },
+      use: { ...devices["Pixel 7"], ...BROWSER },
     },
   ],
   webServer: [

@@ -22,6 +22,7 @@ import Link from "next/link";
 
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
+import { AddButton } from "@/components/add/add-button";
 import { BalanceBadge, balanceLabel } from "@/components/billing/balance-badge";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { CategoryBars } from "@/components/dashboard/category-bars";
@@ -77,21 +78,19 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
   if (!period) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Dashboard" />
+        <PageHeader title="Dashboard">
+          <AddButton user={user} area="dashboard" />
+        </PageHeader>
         <Card>
           <EmptyState
             icon={CalendarPlus}
             title={scope.includeDrafts ? "Noch kein Abrechnungsjahr" : "Noch keine freigegebene Abrechnung"}
             description={
               scope.includeDrafts
-                ? "Lege das erste Abrechnungsjahr an, um Kosten und Einzahlungen zu erfassen."
+                ? "Lege über „Hinzufügen“ das erste Abrechnungsjahr an, um Kosten und Einzahlungen zu erfassen."
                 : "Sobald die Verwaltung eine Abrechnung freigibt, erscheint sie hier."
             }
-          >
-            {can(user, "period:write") ? (
-              <ButtonLink href="/abrechnung">Zur Abrechnung</ButtonLink>
-            ) : null}
-          </EmptyState>
+          />
         </Card>
       </div>
     );
@@ -215,6 +214,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           value={year}
           hrefPattern="/dashboard?jahr={year}"
         />
+        <AddButton user={user} area="dashboard" period={period} />
       </PageHeader>
 
       {/* Aktuelle Abrechnungsperiode */}

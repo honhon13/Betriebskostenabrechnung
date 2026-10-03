@@ -1,22 +1,18 @@
-import { CalendarPlus, Pencil, Plus, Send } from "lucide-react";
+import { Pencil, Send } from "lucide-react";
 import type { Metadata } from "next";
 
 import {
-  submitCostAction,
-  submitPaymentAction,
-  submitPeriodAction,
   updateOwnCostAction,
   updateOwnDocumentAction,
   updateOwnPaymentAction,
 } from "@/app/actions/submissions";
 import { requireUser } from "@/auth/current-user";
 import { can } from "@/auth/rbac";
+import { AddButton } from "@/components/add/add-button";
 import { CostFields } from "@/components/billing/cost-fields";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { DocumentFields } from "@/components/documents/document-fields";
 import { DocumentChips, DocumentPreviewButton } from "@/components/documents/document-preview";
-import { DocumentUploadDialog } from "@/components/documents/document-upload";
-import { Field } from "@/components/forms/field";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { PaymentFields } from "@/components/payments/payment-fields";
 import { ReviewBadge } from "@/components/review/review-badge";
@@ -24,13 +20,12 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { Input, Textarea } from "@/components/ui/input";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
-import { formatCents, formatDate, formatDateTime, todayIso } from "@/lib/format";
+import { formatCents, formatDate, formatDateTime } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
 import { listCategories } from "@/services/masterdata.service";
-import { listSubmittablePeriods, pickDefaultPeriod } from "@/services/periods.service";
+import { listSubmittablePeriods } from "@/services/periods.service";
 import {
   listOwnSubmissions,
   type OwnCostDto,
@@ -77,8 +72,6 @@ export default async function SubmissionsPage() {
   // Kosten lassen sich nur in Jahre einreichen, deren Abrechnung noch nicht veröffentlicht ist.
   const draftPeriods = periods.filter((p) => p.status === "draft");
   const periodOptions = periods.map((p) => ({ id: p.id, year: p.year }));
-  const defaultPeriod = pickDefaultPeriod(draftPeriods) ?? pickDefaultPeriod(periods);
-  const nextYear = Math.max(new Date().getFullYear(), ...periods.map((p) => p.year + 1));
   const formOptions = { periods: periodOptions, units: [], ...own.linkOptions };
 
   const costColumns: Column<OwnCostDto>[] = [
@@ -177,82 +170,7 @@ export default async function SubmissionsPage() {
         title="Meine Eingaben"
         description="Kosten, Einzahlungen, Dokumente und Abrechnungsjahre, die du eingereicht hast."
       >
-        {allowed.cost && draftPeriods.length > 0 && defaultPeriod ? (
-          <FormDialog
-            trigger={
-              <>
-                <Plus aria-hidden />
-                Kosten einreichen
-              </>
-            }
-            triggerVariant="primary"
-            title="Kosten einreichen"
-            description="Umlageschlüssel und TOP-Zuordnung legt die Verwaltung bei der Prüfung fest."
-            action={submitCostAction}
-            submitLabel="Einreichen"
-          >
-            <CostFields
-              submission
-              periods={draftPeriods.map((p) => ({ id: p.id, year: p.year }))}
-              periodId={(pickDefaultPeriod(draftPeriods) ?? draftPeriods[0]).id}
-              categories={categories}
-              allocationKeys={[]}
-              units={[]}
-              allowUpload={allowed.document}
-            />
-          </FormDialog>
-        ) : null}
-        {allowed.payment && user.unitId !== null && defaultPeriod ? (
-          <FormDialog
-            trigger={
-              <>
-                <Plus aria-hidden />
-                Einzahlung einreichen
-              </>
-            }
-            title="Einzahlung einreichen"
-            description={`Für ${user.unitName ?? "deine TOP"}.`}
-            action={submitPaymentAction}
-            submitLabel="Einreichen"
-          >
-            <PaymentFields
-              submission
-              periods={periods}
-              units={[]}
-              defaults={{ periodId: defaultPeriod.id, date: todayIso() }}
-              allowUpload={allowed.document}
-            />
-          </FormDialog>
-        ) : null}
-        {allowed.document && defaultPeriod ? (
-          <DocumentUploadDialog
-            submission
-            {...formOptions}
-            defaultPeriodId={defaultPeriod.id}
-            ocrAvailable={false}
-          />
-        ) : null}
-        {allowed.period ? (
-          <FormDialog
-            trigger={
-              <>
-                <CalendarPlus aria-hidden />
-                Jahr vorschlagen
-              </>
-            }
-            title="Abrechnungsjahr vorschlagen"
-            description="Das Jahr wird erst nach der Prüfung für alle angelegt."
-            action={submitPeriodAction}
-            submitLabel="Einreichen"
-          >
-            <Field label="Jahr" name="year">
-              <Input name="year" type="number" inputMode="numeric" defaultValue={nextYear} required />
-            </Field>
-            <Field label="Notiz" name="notes" optional>
-              <Textarea name="notes" />
-            </Field>
-          </FormDialog>
-        ) : null}
+        <AddButton user={user} area="submissions" />
       </PageHeader>
 
       <Alert tone="info" title="So funktioniert die Prüfung">

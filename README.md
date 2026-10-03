@@ -17,6 +17,31 @@ TOP freigeben. Die TOPs reichen eigene Einträge ein, die Verwaltung prüft sie.
 Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · Drizzle ORM · Neon PostgreSQL ·
 deploybar auf Vercel.
 
+## Einträge anlegen
+
+Oben rechts in Dashboard, Abrechnung, Einzahlungen, Dokumente und „Meine Eingaben" steht die
+Schaltfläche **Hinzufügen**. Sie bietet an, was der angemeldete Benutzer anlegen darf – die
+Aktion des jeweiligen Bereichs zuerst, auf dem Handy als Auswahl von unten:
+
+| Verwaltung (ADMIN) – legt direkt an | Benutzer (USER) – reicht zur Prüfung ein |
+| --- | --- |
+| Kostenposition hinzufügen | Kosten einreichen |
+| Einzahlung hinzufügen | Einzahlung einreichen |
+| Dokument hochladen | Dokument einreichen |
+| Abrechnungsjahr hinzufügen | Abrechnungsjahr vorschlagen |
+
+- **Beliebig viele Einträge.** Jeder Eintrag ist ein eigener Datensatz; Anlegen überschreibt nie
+  etwas Vorhandenes. Mit „Weiteren Eintrag anlegen" bleibt der Dialog für den nächsten offen.
+- **Sofort sichtbar.** Die Ansicht aktualisiert sich nach dem Speichern. Reichen USER außerhalb
+  von „Meine Eingaben" ein, führt der Dialog danach dorthin.
+- **Mehrere Dokumente.** Der Upload-Dialog nimmt mehrere Dateien auf einmal und bleibt nach jedem
+  Upload offen; er führt Buch, was gespeichert wurde und was nicht.
+- **Was nicht geht, steht mit Begründung im Menü.** Kosten lassen sich nur in Jahren im Entwurf
+  anlegen – ist jedes Jahr freigegeben, erklärt der Eintrag das, statt zu verschwinden.
+
+Zwei Grenzen sind gewollt: Je Jahr gibt es genau eine Abrechnung, und dieselbe Datei lässt sich
+je Abrechnungsjahr nur einmal hochladen (Schutz vor versehentlichen Doppel-Uploads).
+
 ## Lokal starten
 
 ```bash
@@ -159,6 +184,7 @@ Prüfer und Kommentar.
 | Neues Recht | Eintrag in `src/auth/permissions.ts`, Prüfung im Service |
 | Neue Rolle | In der Oberfläche anlegen oder `ROLE_DEFINITIONS` ergänzen |
 | Neuer Umlageschlüssel | *Einstellungen → Stammdaten* (Werte je Abrechnungsjahr) |
+| Neue „Hinzufügen"-Aktion | Funktion in `ADD_ACTIONS` (`src/components/add/add-button.tsx`): Recht prüfen, Formular in `AddFormDialog` zurückgeben |
 | Anderer OCR-Anbieter | Klasse mit `OCRService` + `services/ocr/index.ts` |
 | Schemaänderung | `src/db/schema.ts` ändern → `npm run db:generate` → `npm run db:migrate` |
 
@@ -175,8 +201,8 @@ Sichtbereich geprüft. Erlaubt sind PDF, JPEG, PNG, WebP, HEIC und TIFF bis 4 MB
 Vercel Functions); der Typ wird am Dateiinhalt erkannt. Größere Fotos verkleinert der Browser
 vor dem Upload.
 
-Dokumente lassen sich an drei Stellen hochladen: in der Dokumentenverwaltung, direkt beim
-Erfassen einer Kostenposition (als Rechnung) und bei einer Einzahlung (als Zahlungsnachweis).
+Dokumente lassen sich an drei Stellen hochladen: über „Hinzufügen → Dokument hochladen", direkt
+beim Anlegen einer Kostenposition (als Rechnung) und bei einer Einzahlung (als Zahlungsnachweis).
 Ein Dokument kann mit mehreren Kostenpositionen verknüpft sein, z. B. eine Vorschreibung, die
 auf mehrere Positionen aufgeteilt wurde.
 
@@ -196,7 +222,12 @@ REST-API `2024-11-30`). Die Zugangsdaten kommen ausschließlich aus Umgebungsvar
 3. Der Dialog zeigt die erkannten Werte direkt in den Formularfeldern: Rechnungssteller,
    Rechnungsnummer, Rechnungsdatum, Leistungszeitraum, Betrag netto, MwSt., Betrag brutto
    und Beschreibung (aus den Rechnungspositionen). Nicht erkannte Felder bleiben leer.
-4. Werte prüfen, korrigieren oder ergänzen und speichern.
+4. Werte prüfen, korrigieren oder ergänzen und speichern – danach steht der Dialog wieder beim
+   Upload, bereit für das nächste Dokument.
+
+Bei mehreren Dateien auf einmal gelten Typ, Abrechnungsjahr und Verknüpfungen für alle. Jede
+Datei wird einzeln gespeichert und ausgelesen; der Prüfschritt entfällt, die erkannten Werte
+stehen in der Liste und lassen sich dort bearbeiten.
 
 Was man selbst eingetragen hat, überschreibt die OCR nie – sie füllt nur leere Felder. Das
 vollständige OCR-Ergebnis (erkannte Werte, Rohfelder mit Erkennungssicherheit, Anbieter und
@@ -256,7 +287,9 @@ Migration und Seed verwenden `DATABASE_URL_UNPOOLED`. Eine in der Shell gesetzte
 hat Vorrang vor `.env.local` – so lässt sich das Ziel pro Aufruf wählen.
 
 Die End-to-End-Tests starten einen lokalen Nachbau der Azure-API (`e2e/mock-azure.mjs`) –
-sie brauchen keine Azure-Zugangsdaten und schicken keine Dokumente an Azure.
+sie brauchen keine Azure-Zugangsdaten und schicken keine Dokumente an Azure, auch wenn in
+`.env.local` echte Zugangsdaten stehen. Sie laufen im Chromium von Playwright
+(`npx playwright install chromium`); `PW_CHANNEL=chrome` nimmt ein installiertes Google Chrome.
 
 Die End-to-End-Tests schreiben in die Datenbank und setzen das laufende Abrechnungsjahr auf
 „Entwurf" zurück. Sie gehören auf einen Entwicklungs-Branch, nie auf die Produktionsdatenbank.

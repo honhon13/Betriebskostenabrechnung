@@ -151,6 +151,8 @@ const forbiddenForReader: Record<string, () => Promise<unknown>> = {
   updateOwnPayment: () => submissions.updateOwnPayment(reader, 1, paymentSubmission),
   submitDocument: () => submissions.submitDocument(reader, 1, file, documentMeta),
   updateOwnDocument: () => submissions.updateOwnDocument(reader, 1, documentMeta),
+  // Verknüpfungsziele für den Upload-Dialog unter „Hinzufügen“.
+  listOwnLinkOptions: () => submissions.listOwnLinkOptions(reader),
 };
 
 describe("Services lehnen USER serverseitig ab", () => {

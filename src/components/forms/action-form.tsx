@@ -30,6 +30,8 @@ interface ActionFormProps {
   submitVariant?: "primary" | "danger";
   className?: string;
   footerClassName?: string;
+  /** Inhalt links in der Fußzeile, z. B. eine Option zum Speichern. */
+  footerStart?: ReactNode;
 }
 
 /**
@@ -48,6 +50,7 @@ export function ActionForm({
   submitVariant = "primary",
   className,
   footerClassName,
+  footerStart,
 }: ActionFormProps) {
   const [state, setState] = useState<ActionState>(null);
   const [pending, startTransition] = useTransition();
@@ -99,7 +102,8 @@ export function ActionForm({
           ) : null}
         </div>
       </FieldErrorsContext>
-      <div className={cn("flex flex-wrap justify-end gap-2 pt-4", footerClassName)}>
+      <div className={cn("flex flex-wrap items-center justify-end gap-2 pt-4", footerClassName)}>
+        {footerStart ? <div className="mr-auto">{footerStart}</div> : null}
         {onCancel ? (
           <Button variant="secondary" onClick={onCancel} disabled={pending}>
             {cancelLabel}

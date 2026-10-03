@@ -500,3 +500,51 @@ export async function listOwnSubmissions(actor: SessionUser): Promise<OwnSubmiss
     },
   };
 }
+
+/**
+ * Eigene Kosten und Einzahlungen als Verknüpfungsziele für ein neues Dokument – die schlanke
+ * Variante von `listOwnSubmissions` für das Einreichen außerhalb von „Meine Eingaben“.
+ */
+export async function listOwnLinkOptions(
+  actor: SessionUser,
+): Promise<{ costs: LinkOption[]; payments: LinkOption[] }> {
+  authorize(actor, "document:submit");
+  const db = getDb();
+  const [costRows, paymentRows] = await Promise.all([
+    db
+      .select({
+        id: costs.id,
+        periodId: costs.periodId,
+        description: costs.description,
+        amountCents: costs.amountCents,
+        categoryName: costCategories.name,
+      })
+      .from(costs)
+      .innerJoin(costCategories, eq(costCategories.id, costs.categoryId))
+      .where(eq(costs.createdBy, actor.id))
+      .orderBy(desc(costs.createdAt)),
+    db
+      .select({
+        id: payments.id,
+        periodId: payments.periodId,
+        paymentDate: payments.paymentDate,
+        amountCents: payments.amountCents,
+      })
+      .from(payments)
+      .where(eq(payments.createdBy, actor.id))
+      .orderBy(desc(payments.paymentDate), desc(payments.id)),
+  ]);
+
+  return {
+    costs: costRows.map((cost) => ({
+      id: cost.id,
+      periodId: cost.periodId,
+      label: `${cost.categoryName} – ${cost.description} (${formatCents(cost.amountCents)})`,
+    })),
+    payments: paymentRows.map((payment) => ({
+      id: payment.id,
+      periodId: payment.periodId,
+      label: `${formatDate(payment.paymentDate)} · ${formatCents(payment.amountCents)}`,
+    })),
+  };
+}

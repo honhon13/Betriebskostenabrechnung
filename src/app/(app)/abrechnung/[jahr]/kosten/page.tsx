@@ -1,7 +1,7 @@
-import { Lock, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
+import { Lock, Pencil, ReceiptText, Trash2 } from "lucide-react";
 import type { Metadata } from "next";
 
-import { createCostAction, deleteCostAction, updateCostAction } from "@/app/actions/billing";
+import { deleteCostAction, updateCostAction } from "@/app/actions/billing";
 import { can, getDataScope } from "@/auth/rbac";
 import { CostFields } from "@/components/billing/cost-fields";
 import { DocumentChips } from "@/components/documents/document-preview";
@@ -108,31 +108,6 @@ export default async function CostsPage({
     },
   ];
 
-  const createDialog = canWrite ? (
-    <FormDialog
-      trigger={
-        <>
-          <Plus aria-hidden />
-          Kosten erfassen
-        </>
-      }
-      triggerVariant="primary"
-      title="Kosten erfassen"
-      description={`Abrechnungsjahr ${period.year}`}
-      action={createCostAction}
-    >
-      <CostFields
-        periods={draftPeriods}
-        periodId={period.id}
-        categories={categories}
-        allocationKeys={allocationKeys}
-        units={units}
-        allowUpload={allowUpload}
-        ocrAvailable={ocrAvailable}
-      />
-    </FormDialog>
-  ) : null;
-
   return (
     <div className="space-y-4">
       {!draft ? (
@@ -151,13 +126,16 @@ export default async function CostsPage({
             `${official.length} ${official.length === 1 ? "Position" : "Positionen"} · ${formatCents(total)}` +
             (unreviewed > 0 ? ` · ${unreviewed} eingereicht, nicht freigegeben` : "")
           }
-          action={createDialog}
         />
         {costs.length === 0 ? (
           <EmptyState
             icon={ReceiptText}
             title="Noch keine Kosten"
-            description="Erfasse Rechnungen und Vorschreibungen mit Kostenart, Betrag und Umlageschlüssel."
+            description={
+              canWrite
+                ? "Lege über „Hinzufügen“ Rechnungen und Vorschreibungen mit Kostenart, Betrag und Umlageschlüssel an."
+                : "In diesem Abrechnungsjahr gibt es keine Kostenpositionen."
+            }
           />
         ) : (
           <div className="pt-3">

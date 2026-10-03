@@ -4,6 +4,10 @@ import { can, canAny } from "@/auth/rbac";
 import { AppShell } from "@/components/layout/app-shell";
 import { countPendingReviews } from "@/services/review.service";
 
+// „Hinzufügen“ steht auf jeder Seite: Wird dabei ein Beleg angehängt, wartet die Server Action
+// auf die OCR-Auswertung bei Azure – dafür reicht das Standard-Zeitlimit nicht immer.
+export const maxDuration = 60;
+
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   // Nur für die Anzeige in der Sidebar. Geschützt wird jede Seite und jeder
   // Service selbst – ein Layout wird bei Navigation nicht neu ausgeführt.

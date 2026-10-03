@@ -30,6 +30,8 @@ interface DocumentFieldsProps extends DocumentFormOptions {
   lockPeriod?: boolean;
   /** Einreichen durch Benutzer: das Dokument gehört immer zur eigenen TOP. */
   submission?: boolean;
+  /** Mehrere Dateien auf einmal: Rechnungsdaten gehören zu einem einzelnen Dokument und entfallen. */
+  hideInvoiceData?: boolean;
   document?: DocumentDto;
 }
 
@@ -42,6 +44,7 @@ export function DocumentFields({
   defaultPeriodId,
   lockPeriod = false,
   submission = false,
+  hideInvoiceData = false,
   costs,
   payments,
   units,
@@ -167,7 +170,11 @@ export function DocumentFields({
         </Field>
       ) : null}
 
-      <details className="group rounded-lg border border-border" open={Boolean(document)}>
+      <details
+        className="group rounded-lg border border-border"
+        open={Boolean(document)}
+        hidden={hideInvoiceData}
+      >
         <summary className="flex h-10 cursor-pointer list-none items-center px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
           Rechnungsdaten (Rechnungssteller, Datum, Beträge)
         </summary>
