@@ -212,6 +212,13 @@ const isIsoDate = (value: string | undefined): value is string =>
 const text = (field: AzureField | undefined): string | null =>
   (field?.valueString ?? field?.content)?.replace(/\s+/g, " ").trim() || null;
 
+/** Azure liefert den Steuersatz samt umgebendem Text („20 %:“, „MwSt. 20%“) – übrig bleibt „20 %“. */
+const percent = (field: AzureField | undefined): string | null => {
+  const value = text(field);
+  const match = value?.match(/(\d+(?:[.,]\d+)?)\s*%/);
+  return match ? `${match[1]} %` : value;
+};
+
 const cents = (field: AzureField | undefined): number | null => {
   const amount = field?.valueCurrency?.amount;
   return typeof amount === "number" && Number.isFinite(amount) ? Math.round(amount * 100) : null;
@@ -228,7 +235,7 @@ export function mapInvoiceFields(fields: Record<string, AzureField | undefined>)
     .filter((value): value is string => value !== null);
   const description = items.slice(0, 3).join(", ").slice(0, 300) || null;
 
-  const taxRate = text(fields.TaxDetails?.valueArray?.[0]?.valueObject?.Rate);
+  const taxRate = percent(fields.TaxDetails?.valueArray?.[0]?.valueObject?.Rate);
 
   const used = [
     fields.InvoiceDate,

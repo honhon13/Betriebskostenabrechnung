@@ -83,6 +83,15 @@ describe("mapInvoiceFields", () => {
     expect(mapInvoiceFields({ InvoiceDate: { valueDate: "15.03.2026", content: "15.03.2026" } }).documentDate).toBeNull();
   });
 
+  it("bereinigt den Steuersatz um umgebenden Text", () => {
+    const withRate = (content: string) =>
+      mapInvoiceFields({ TaxDetails: { valueArray: [{ valueObject: { Rate: { content } } }] } }).taxRate;
+    // So liefert es Azure für „MwSt. 20 %: 20,00 EUR“.
+    expect(withRate("20 %:")).toBe("20 %");
+    expect(withRate("MwSt. 13,5%")).toBe("13,5 %");
+    expect(withRate("20")).toBe("20");
+  });
+
   it("speichert die Rohfelder kompakt mit", () => {
     expect(mapRawFields(invoiceFields).InvoiceId).toEqual({ content: "RE-2026-0042", confidence: 0.97 });
     expect(Object.keys(mapRawFields(invoiceFields))).toContain("Items");
