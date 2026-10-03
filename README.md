@@ -131,7 +131,8 @@ eigenen Anteil in freigegebenen Jahren. Unter „Werte als Tabelle" stehen diese
 ```
 src/
   app/           Seiten, Layouts, Route Handler und Server Actions (app/actions);
-                 icon.png ist das Favicon (Datei-Konvention von Next.js)
+                 favicon.ico (16/32/48 px), icon.png (192 px) und apple-icon.png (180 px)
+                 sind das App-Icon – Next.js bindet sie über die Datei-Konvention ein
   components/    UI-Bausteine (ui, forms, layout) und Fachkomponenten
   auth/          Passwort-Hashing, Sitzungen, Rechtekatalog, RBAC-Prüfungen
   services/      Fachlogik mit Rechteprüfung – einziger Weg zur Datenbank

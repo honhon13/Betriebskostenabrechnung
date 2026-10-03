@@ -9,13 +9,23 @@ test.describe("Anmeldung", () => {
     await expect(page.getByRole("heading", { name: "Anmelden" })).toBeVisible();
   });
 
-  test("Favicon ist eingebunden und ohne Anmeldung abrufbar", async ({ page }) => {
+  test("Favicon: passende Größen, eingebunden und ohne Anmeldung abrufbar", async ({ page }) => {
     await page.goto("/login");
-    const href = await page.locator('link[rel="icon"]').first().getAttribute("href");
-    expect(href).toMatch(/^\/icon\.png/);
-    const icon = await page.request.get(href!);
-    expect(icon.status()).toBe(200);
-    expect(icon.headers()["content-type"]).toBe("image/png");
+    // Browser-Tab (auch für Tabs ohne HTML, z. B. ein geöffnetes PDF), Lesezeichen und iOS-Startbildschirm.
+    const icons = [
+      { selector: 'link[rel="icon"][href^="/favicon.ico"]', type: "image/x-icon", sizes: "48x48" },
+      { selector: 'link[rel="icon"][href^="/icon.png"]', type: "image/png", sizes: "192x192" },
+      { selector: 'link[rel="apple-touch-icon"]', type: "image/png", sizes: "180x180" },
+    ];
+    for (const icon of icons) {
+      const link = page.locator(icon.selector);
+      await expect(link).toHaveAttribute("sizes", icon.sizes);
+      const response = await page.request.get((await link.getAttribute("href"))!);
+      expect(response.status(), icon.selector).toBe(200);
+      expect(response.headers()["content-type"]).toBe(icon.type);
+      // Ein Tab-Icon soll klein bleiben – die Originalgrafik hatte 1 MB.
+      expect((await response.body()).length, icon.selector).toBeLessThan(100_000);
+    }
   });
 
   test("API antwortet ohne Sitzung mit 401", async ({ request }) => {
