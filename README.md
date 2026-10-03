@@ -8,7 +8,7 @@ TOP freigeben. Die TOPs reichen eigene Einträge ein, die Verwaltung prüft sie.
 | --- | --- |
 | **Dashboard** | Abrechnungsperiode, Gesamtkosten, Kostenverlauf (Diagramm je Monat oder Jahr), Kosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
 | **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen, Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente; Jahresabrechnung als PDF |
-| **Einzahlungen** | Je TOP mit Datum, Betrag, Jahr, Beschreibung, Zahlungsstatus und Nachweis; Guthaben/Nachzahlung je TOP |
+| **Einzahlungen** | Je TOP mit Datum, Betrag, Jahr, Beschreibung, Zahlungsstatus und Nachweis; Guthaben/Nachzahlung je TOP; **Abrechnungskonto** mit Anfangssaldo, Bewegungen und aktuellem Saldo je TOP |
 | **Dokumente** | Rechnungen, Zahlungsnachweise, Verträge, Sonstiges – mit Suche, Filtern, Sortierung, Vorschau und Download |
 | **Wiederkehrende Kosten** | Vorlagen mit Betrag, Intervall, Umlageschlüssel und TOP-Zuordnung; daraus Kostenpositionen je Monat, Quartal oder Jahr erzeugen |
 | **Meine Eingaben** (USER) | Kosten, Einzahlungen, Dokumente und Abrechnungsjahre einreichen; Prüfstand und Kommentar der Verwaltung sehen |
@@ -90,6 +90,36 @@ Rechnungssteller, Umlageschlüssel und TOP-Zuordnung.
   ADMIN. USER sehen aktive Vorlagen, an denen ihre TOP beteiligt ist (`recurring:read`), und
   reichen daraus Kosten zur Prüfung ein – mit Schlüssel und TOPs der Vorlage.
 
+## Abrechnungskonto
+
+Unter *Einzahlungen → Abrechnungskonto* läuft je TOP ein Konto über die tatsächlichen
+Geldbewegungen – fortlaufend über alle Abrechnungsjahre:
+
+    Anfangssaldo zum Stichtag + Einzahlungen − Auszahlungen = aktueller Saldo
+
+- **Stichtag und Anfangssaldo:** Die Verwaltung legt einmal den Stichtag der Kontoführung und
+  je TOP einen Anfangssaldo fest (Guthaben positiv, Rückstand mit Minus, optional mit Notiz).
+  Bewegungen ab dem Stichtag (einschließlich) werden weitergeführt; alles davor steckt im
+  Anfangssaldo.
+- **Bewegungen** sind die Einzahlungen: positive Beträge sind Einzahlungen, negative
+  Auszahlungen bzw. Rückzahlungen. Es zählt, was offiziell zählt – Status „Eingegangen" und
+  freigegeben. Jede Bewegung ist eine eigene Zeile in `payments`.
+- **Der Anfangsbestand wird nie überschrieben:** Er steht getrennt von den Bewegungen
+  (`account_settings`, `account_opening_balances`), der Saldo wird bei jedem Aufruf daraus
+  berechnet und nirgends gespeichert. Ändern lässt er sich nur über „Anfangsbestand ändern"
+  (Recht `account:manage`, nur ADMIN); jede Änderung steht mit vorherigem und neuem Wert im
+  Audit-Log.
+- **Ansicht:** Kontostand als Kacheln, Konten je TOP mit dem **Gesamtbestand** als Summe der
+  Salden und je TOP ein Kontoauszug mit dem Saldo nach jeder Bewegung. Das Dashboard zeigt
+  dieselbe Übersicht samt den jüngsten Bewegungen.
+- **Sichtbereich:** USER sehen nur das Konto der eigenen TOP (`account:read`) – dort aber alle
+  Bewegungen seit dem Stichtag, auch in Jahren, deren Abrechnung noch nicht freigegeben ist:
+  ein Kontostand ohne die laufenden Einzahlungen wäre falsch.
+- **Getrennt von der Abrechnung:** Kosten und ihre Verteilung fließen nicht ins Konto ein, und
+  das Konto verändert weder die Jahresabrechnung (Einzahlungen − Kostenanteil je Jahr) noch
+  das PDF. Eine Kostenposition beschreibt den Abrechnungsgrund, eine Ein- oder Auszahlung die
+  Geldbewegung.
+
 ## Audit-Log
 
 Unter *Einstellungen → Audit-Log* (nur ADMIN, Recht `audit:read`) steht, wer wann was getan hat:
@@ -99,7 +129,8 @@ neuer Wert. Filtern lässt sich nach Bereich, Benutzer, Zeitraum und Suchtext.
 Protokolliert werden: Anmeldung, fehlgeschlagene Anmeldung, Abmeldung, Passwortwechsel und
 -reset; Abrechnungsjahre (angelegt, eingereicht, freigegeben, Freigabe zurückgenommen,
 gelöscht) und Umlageschlüssel-Werte; Kosten, Einzahlungen und Dokumente (angelegt bzw.
-hochgeladen, eingereicht, geändert, gelöscht, OCR); Freigaben und Ablehnungen der Prüfung;
+hochgeladen, eingereicht, geändert, gelöscht, OCR); Stichtag und Anfangssalden des
+Abrechnungskontos; Freigaben und Ablehnungen der Prüfung;
 Vorlagen für wiederkehrende Kosten; Benutzer, Rollen und Stammdaten.
 
 - **Unveränderlich:** Die Anwendung kennt keine Funktion zum Ändern oder Löschen von
@@ -250,7 +281,8 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
 | `costs`, `cost_units` | Kostenpositionen mit Rechnungsdaten (Rechnungssteller, Nummer, Datum, Leistungszeitraum, Netto, MwSt., Brutto) und ihre TOP-Zuordnung; `recurring_cost_id` vermerkt die Vorlage, aus der eine Position erzeugt wurde |
 | `recurring_costs`, `recurring_cost_units` | Vorlagen für wiederkehrende Kosten und ihre TOP-Zuordnung |
-| `payments` | Einzahlungen je TOP mit Zahlungsstatus |
+| `payments` | Einzahlungen je TOP mit Zahlungsstatus – zugleich die Bewegungen des Abrechnungskontos (negativ = Auszahlung) |
+| `account_settings`, `account_opening_balances` | Stichtag der Kontoführung (eine Zeile) und Anfangssaldo je TOP |
 | `documents`, `document_files`, `document_links` | Dokumente (Metadaten), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
 | `audit_log` | Audit-Log: Zeitpunkt, Benutzer/TOP, Aktion, Datensatz, vorherige/neue Werte – nur anhängbar |
 
@@ -380,7 +412,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung |
+| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung, Abrechnungskonto |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |
@@ -396,5 +428,6 @@ sie brauchen keine Azure-Zugangsdaten und schicken keine Dokumente an Azure, auc
 `.env.local` echte Zugangsdaten stehen. Sie laufen im Chromium von Playwright
 (`npx playwright install chromium`); `PW_CHANNEL=chrome` nimmt ein installiertes Google Chrome.
 
-Die End-to-End-Tests schreiben in die Datenbank und setzen das laufende Abrechnungsjahr auf
-„Entwurf" zurück. Sie gehören auf einen Entwicklungs-Branch, nie auf die Produktionsdatenbank.
+Die End-to-End-Tests schreiben in die Datenbank, setzen das laufende Abrechnungsjahr auf
+„Entwurf" zurück und löschen Stichtag und Anfangssalden des Abrechnungskontos. Sie gehören auf
+einen Entwicklungs-Branch, nie auf die Produktionsdatenbank.

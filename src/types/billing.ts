@@ -134,6 +134,52 @@ export interface PaymentDto extends ReviewInfo {
   createdAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// Abrechnungskonto
+// ---------------------------------------------------------------------------
+
+/** Eine Kontobewegung: Einzahlung (positiv) oder Auszahlung (negativ). */
+export interface AccountMovement {
+  /** ID der Einzahlung, aus der die Bewegung stammt. */
+  id: number;
+  date: string;
+  /** Abrechnungsjahr, dem die Zahlung zugeordnet ist. */
+  year: number;
+  purpose: string | null;
+  amountCents: number;
+  /** Saldo der TOP nach dieser Bewegung. */
+  balanceCents: number;
+}
+
+/** Laufendes Konto einer TOP seit dem Stichtag. */
+export interface UnitAccount {
+  unitId: number;
+  unitName: string;
+  /** Anfangssaldo zum Stichtag: positiv = Guthaben, negativ = Rückstand. */
+  openingCents: number;
+  openingNote: string | null;
+  /** Summe der Einzahlungen seit dem Stichtag. */
+  inflowCents: number;
+  /** Summe der Auszahlungen seit dem Stichtag – als positiver Betrag. */
+  outflowCents: number;
+  /** Anfangssaldo + Einzahlungen − Auszahlungen. */
+  balanceCents: number;
+  /** Chronologisch, älteste zuerst. */
+  movements: AccountMovement[];
+}
+
+export interface AccountOverview {
+  /** Stichtag der Kontoführung – null, solange das Konto nicht eingerichtet ist. */
+  startDate: string | null;
+  /** Konten im Sichtbereich: alle TOPs bzw. nur die eigene. */
+  units: UnitAccount[];
+  /** Summen über die sichtbaren Konten; der Gesamtbestand ist die Summe der Salden. */
+  openingCents: number;
+  inflowCents: number;
+  outflowCents: number;
+  balanceCents: number;
+}
+
 /** Normalisierte OCR-Felder – unabhängig vom OCR-Anbieter. Nicht Erkanntes ist null. */
 export interface OcrFields {
   /** Rechnungssteller. */

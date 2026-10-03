@@ -269,6 +269,49 @@ export const paymentSubmissionSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Abrechnungskonto
+// ---------------------------------------------------------------------------
+
+/** Anfangssaldo: mit Vorzeichen (negativ = Rückstand), 0 erlaubt, leer zählt als 0. */
+const openingAmountCents = z
+  .string()
+  .nullish()
+  .transform((value, ctx) => {
+    if (!value || value.trim() === "") return 0;
+    const cents = parseEuroToCents(value);
+    if (cents === null) {
+      ctx.addIssue({ code: "custom", message: "Bitte einen Betrag wie 1.234,56 angeben." });
+      return z.NEVER;
+    }
+    return cents;
+  })
+  .refine((cents) => Math.abs(cents) <= MAX_AMOUNT_CENTS, "Der Betrag ist zu groß.");
+
+/**
+ * Stichtag und Anfangssalden des Abrechnungskontos. Die Felder heißen `amount:<unitId>` und
+ * `note:<unitId>` – so landet ein Fehler direkt am Feld der betroffenen TOP.
+ */
+export function accountOpeningSchema(unitIds: number[]) {
+  return z.object({
+    startDate: isoDate.refine(
+      (value) => value >= "2000-01-01" && value <= "2100-12-31",
+      "Bitte ein Datum zwischen 2000 und 2100 angeben.",
+    ),
+    ...Object.fromEntries(
+      unitIds.flatMap((unitId) => [
+        [`amount:${unitId}`, openingAmountCents],
+        [`note:${unitId}`, optionalText(200)],
+      ]),
+    ),
+  });
+}
+
+export interface AccountOpeningInput {
+  startDate: string;
+  balances: { unitId: number; amountCents: number; note: string | null }[];
+}
+
+// ---------------------------------------------------------------------------
 // Prüfung
 // ---------------------------------------------------------------------------
 

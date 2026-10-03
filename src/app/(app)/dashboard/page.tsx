@@ -22,6 +22,7 @@ import Link from "next/link";
 
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
+import { AccountSummaryTable } from "@/components/account/account-parts";
 import { AddButton } from "@/components/add/add-button";
 import { BalanceBadge, balanceLabel } from "@/components/billing/balance-badge";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
@@ -37,6 +38,7 @@ import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { formatCents, formatDate, formatDateTime, formatPercent } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
+import { getAccountOverview } from "@/services/account.service";
 import { getDashboard, type Activity } from "@/services/dashboard.service";
 import { getCostTrend } from "@/services/overview.service";
 import { listPeriods, pickDefaultPeriod } from "@/services/periods.service";
@@ -102,12 +104,18 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
     verlauf === TREND_ALL ? null : (periods.find((p) => String(p.year) === verlauf) ?? period);
 
   const reviews = can(user, "review:manage");
-  const [data, trend, pendingReviews, ownOpen] = await Promise.all([
+  const [data, trend, pendingReviews, ownOpen, account] = await Promise.all([
     getDashboard(user, period.id),
     can(user, "cost:read") ? getCostTrend(user, trendPeriod) : null,
     reviews ? countPendingReviews(user) : 0,
     reviews ? null : countOwnOpenSubmissions(user),
+    can(user, "account:read") ? getAccountOverview(user) : null,
   ]);
+  // Die jüngsten Bewegungen über alle sichtbaren Konten – neueste zuerst.
+  const recentMovements = (account?.units ?? [])
+    .flatMap((unit) => unit.movements.map((movement) => ({ ...movement, unitName: unit.unitName })))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id)
+    .slice(0, 5);
   const own = !scope.allUnits;
   const year = period.year;
   const { openItems } = data;
@@ -305,6 +313,59 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
               <CostTrendChart trend={trend} singleLabel={own ? "Mein Kostenanteil" : "Kosten gesamt"} />
             )}
           </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Laufendes Konto über alle Jahre – unabhängig vom oben gewählten Abrechnungsjahr. */}
+      {account?.startDate && account.units.length > 0 ? (
+        <Card>
+          <CardHeader
+            title="Abrechnungskonto"
+            description={`Seit ${formatDate(account.startDate)}: Anfangssaldo + Einzahlungen − Auszahlungen = aktueller Saldo.`}
+            action={
+              <ButtonLink href="/einzahlungen/konto" variant="ghost" size="sm">
+                Zum Konto
+              </ButtonLink>
+            }
+          />
+          <AccountSummaryTable account={account} />
+          <div className="border-t border-border px-4 py-3 sm:px-5">
+            <h3 className="text-sm font-semibold">Aktuelle Bewegungen</h3>
+            {recentMovements.length === 0 ? (
+              <p className="mt-1 text-sm text-muted">
+                Seit dem Stichtag gibt es noch keine Ein- oder Auszahlungen.
+              </p>
+            ) : (
+              <ul className="mt-1 divide-y divide-border text-sm">
+                {recentMovements.map((movement) => (
+                  <li key={movement.id} className="flex flex-wrap items-center gap-x-4 gap-y-0.5 py-2">
+                    <span className="w-20 shrink-0 tabular-nums">{formatDate(movement.date)}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {own ? "" : `${movement.unitName} · `}
+                      {movement.purpose ?? (movement.amountCents < 0 ? "Auszahlung" : "Einzahlung")}
+                    </span>
+                    <span className="ml-auto font-medium tabular-nums">
+                      {formatCents(movement.amountCents)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </Card>
+      ) : account && can(user, "account:manage") ? (
+        <Card className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 p-4 sm:px-5">
+          <div className="min-w-0">
+            <p className="font-semibold">Abrechnungskonto</p>
+            <p className="text-sm text-muted">
+              Die laufende Kontoführung ist noch nicht eingerichtet – lege Stichtag und Anfangssalden
+              je TOP fest.
+            </p>
+          </div>
+          <ButtonLink href="/einzahlungen/konto" variant="secondary">
+            Konto einrichten
+            <ChevronRight aria-hidden />
+          </ButtonLink>
         </Card>
       ) : null}
 

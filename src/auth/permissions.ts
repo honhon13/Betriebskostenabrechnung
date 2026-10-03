@@ -19,6 +19,9 @@ export const PERMISSIONS = {
   "payment:write": "Einzahlungen erfassen und bearbeiten",
   "payment:delete": "Einzahlungen löschen",
 
+  "account:read": "Abrechnungskonto ansehen",
+  "account:manage": "Stichtag und Anfangssalden des Abrechnungskontos festlegen",
+
   "document:read": "Dokumente ansehen",
   "document:write": "Dokumente hochladen und bearbeiten",
   "document:delete": "Dokumente löschen",
@@ -85,6 +88,7 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "payment:submit",
       "document:submit",
       "recurring:read",
+      "account:read",
     ],
   },
 ];

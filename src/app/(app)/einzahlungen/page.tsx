@@ -11,6 +11,7 @@ import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { NavSelect } from "@/components/layout/year-select";
 import { PaymentFields } from "@/components/payments/payment-fields";
+import { PaymentsTabs } from "@/components/payments/payments-tabs";
 import { ReviewFlag } from "@/components/review/review-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -182,6 +183,8 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
         />
         <AddButton user={user} area="payments" period={period} unitId={unit?.id} />
       </PageHeader>
+
+      {can(user, "account:read") ? <PaymentsTabs /> : null}
 
       {period && balances.length > 0 ? (
         <Card>

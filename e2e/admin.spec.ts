@@ -46,21 +46,23 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     await expect(page.getByText("Gesamtkosten")).toBeVisible();
     await expect(page.getByText("Einzahlungen gesamt")).toBeVisible();
     await expect(page.getByText(`Abrechnungsjahr ${RELEASED_YEAR}`).first()).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Abrechnung je TOP" })).toBeVisible();
+    // Auf dem Dashboard steht auch das Abrechnungskonto je TOP – hier geht es um die Abrechnung.
+    const statement = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: "Abrechnung je TOP" }) });
+    await expect(statement).toBeVisible();
     for (const top of ["TOP 1", "TOP 2", "TOP 3"]) {
-      await expect(page.getByRole("rowheader", { name: top })).toBeVisible();
+      await expect(statement.getByRole("rowheader", { name: top })).toBeVisible();
     }
     for (const heading of ["Kosten nach Kostenart", "Offene Positionen", "Letzte Dokumente", "Letzte Aktivitäten"]) {
       await expect(page.getByRole("heading", { name: heading })).toBeVisible();
     }
 
     // Kosten − Einzahlungen je TOP ergibt die Differenz, und die Summenzeile die Kacheln.
-    const total = (await row(page, "Gesamt").last().getByRole("cell").allTextContents()).map(parseCents);
-    const perUnit = await Promise.all(
-      ["TOP 1", "TOP 2", "TOP 3"].map(async (top) =>
-        (await row(page, top).first().getByRole("cell").allTextContents()).map(parseCents),
-      ),
-    );
+    const cells = async (name: string) =>
+      (await statement.getByRole("row").filter({ hasText: name }).getByRole("cell").allTextContents()).map(parseCents);
+    const total = await cells("Gesamt");
+    const perUnit = await Promise.all(["TOP 1", "TOP 2", "TOP 3"].map(cells));
     expect(perUnit.reduce((acc, cells) => acc + cells[0], 0)).toBe(total[0]);
     expect(perUnit.reduce((acc, cells) => acc + cells[1], 0)).toBe(total[1]);
     for (const [cost, paid, difference] of perUnit) expect(Math.abs(paid - cost)).toBe(difference);

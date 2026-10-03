@@ -346,6 +346,43 @@ export const payments = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Abrechnungskonto
+// ---------------------------------------------------------------------------
+
+/**
+ * Laufendes Konto je TOP: Anfangssaldo zum Stichtag plus alle Ein- und Auszahlungen danach.
+ * Die Bewegungen selbst sind die Einzahlungen (`payments`, negative Beträge = Auszahlung) –
+ * hier steht nur, ab wann und womit die Kontoführung beginnt. Der Saldo wird daraus immer
+ * berechnet und nirgends gespeichert; eine Buchung kann den Anfangsbestand daher nie verändern.
+ *
+ * Genau eine Zeile (id = 1): der Stichtag gilt für alle TOPs.
+ */
+export const accountSettings = pgTable(
+  "account_settings",
+  {
+    id: integer("id").primaryKey().default(1),
+    /** Stichtag: Bewegungen ab diesem Tag (einschließlich) werden weitergeführt. */
+    startDate: date("start_date", { mode: "string" }).notNull(),
+    updatedBy: integer("updated_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt,
+    updatedAt,
+  },
+  (t) => [check("account_settings_singleton", sql`${t.id} = 1`)],
+);
+
+/** Anfangssaldo einer TOP zum Stichtag: positiv = Guthaben, negativ = Rückstand. */
+export const accountOpeningBalances = pgTable("account_opening_balances", {
+  unitId: integer("unit_id")
+    .primaryKey()
+    .references(() => units.id, { onDelete: "cascade" }),
+  amountCents: integer("amount_cents").notNull().default(0),
+  note: text("note"),
+  updatedBy: integer("updated_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt,
+  updatedAt,
+});
+
+// ---------------------------------------------------------------------------
 // Dokumente
 // ---------------------------------------------------------------------------
 

@@ -10,6 +10,7 @@ export const AUDIT_AREAS = {
   period: "Abrechnung",
   cost: "Kosten",
   payment: "Einzahlungen",
+  account: "Abrechnungskonto",
   document: "Dokumente",
   review: "Prüfung",
   recurring: "Wiederkehrende Kosten",
@@ -42,6 +43,9 @@ export const AUDIT_ACTIONS = {
   "payment.submitted": { area: "payment", label: "Einzahlung eingereicht" },
   "payment.updated": { area: "payment", label: "Einzahlung geändert" },
   "payment.deleted": { area: "payment", label: "Einzahlung gelöscht" },
+
+  "account.opening_created": { area: "account", label: "Anfangsbestand festgelegt" },
+  "account.opening_updated": { area: "account", label: "Anfangsbestand geändert" },
 
   "document.uploaded": { area: "document", label: "Dokument hochgeladen" },
   "document.submitted": { area: "document", label: "Dokument eingereicht" },
@@ -82,6 +86,7 @@ export type AuditEntityType =
   | "period"
   | "cost"
   | "payment"
+  | "account"
   | "document"
   | "recurring_cost"
   | "unit"

@@ -44,7 +44,7 @@ export function PaymentFields({
             required
           />
         </Field>
-        <Field label="Betrag (€)" name="amount" hint="Rückzahlungen mit Minus.">
+        <Field label="Betrag (€)" name="amount" hint="Auszahlungen und Rückzahlungen mit Minus.">
           <Input
             name="amount"
             inputMode="decimal"

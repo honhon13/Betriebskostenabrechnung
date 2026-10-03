@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ForbiddenError } from "@/auth/errors";
 import { ROLE_DEFINITIONS, ROLE_KEYS } from "@/auth/permissions";
+import * as account from "@/services/account.service";
 import * as allocation from "@/services/allocation.service";
 import * as annualStatement from "@/services/annual-statement.service";
 import * as audit from "@/services/audit.service";
@@ -136,6 +137,12 @@ const forbiddenForUser: Record<string, () => Promise<unknown>> = {
   createAllocationKey: () => masterdata.createAllocationKey(user, key),
   updateAllocationKey: () => masterdata.updateAllocationKey(user, 1, key),
   deleteAllocationKey: () => masterdata.deleteAllocationKey(user, 1),
+  // Abrechnungskonto: Stichtag und Anfangssalden legt nur die Verwaltung fest.
+  saveAccountOpening: () =>
+    account.saveAccountOpening(user, {
+      startDate: "2026-01-01",
+      balances: [{ unitId: 1, amountCents: 100_00, note: null }],
+    }),
   // Wiederkehrende Kosten: USER verwenden Vorlagen, pflegen sie aber nicht.
   createRecurringCost: () => recurring.createRecurringCost(user, template),
   updateRecurringCost: () => recurring.updateRecurringCost(user, 1, template),
@@ -191,6 +198,8 @@ const forbiddenForReader: Record<string, () => Promise<unknown>> = {
   updateOwnDocument: () => submissions.updateOwnDocument(reader, 1, documentMeta),
   // Verknüpfungsziele für den Upload-Dialog unter „Hinzufügen“.
   listOwnLinkOptions: () => submissions.listOwnLinkOptions(reader),
+  // Das Abrechnungskonto sehen ist ein eigenes Recht.
+  getAccountOverview: () => account.getAccountOverview(reader),
   // Vorlagen sehen und verwenden ist ein eigenes Recht.
   listRecurringCosts: () => recurring.listRecurringCosts(reader),
   generateCostsFromTemplate: () =>
@@ -211,7 +220,7 @@ describe("Services lehnen USER serverseitig ab", () => {
   });
 
   it("deckt jede schreibende Service-Funktion ab", () => {
-    const mutating = [allocation, costs, documents, masterdata, payments, periods, recurring, review, users]
+    const mutating = [account, allocation, costs, documents, masterdata, payments, periods, recurring, review, users]
       .flatMap((module) => Object.keys(module))
       .filter((name) =>
         /^(create|update|delete|set|save|reset|upload|run|process|fill|review)/.test(name),
@@ -244,6 +253,12 @@ describe("Neue Rechte der Systemrollen", () => {
       expect(user.permissions).not.toContain(permission);
       expect(admin).toContain(permission);
     }
+  });
+
+  it("USER sehen das Abrechnungskonto, den Anfangsbestand ändert nur ADMIN", () => {
+    expect(user.permissions).toContain("account:read");
+    expect(user.permissions).not.toContain("account:manage");
+    expect(admin).toContain("account:manage");
   });
 
   it("die Jahresabrechnung als PDF setzt das Leserecht auf Kosten voraus", async () => {
