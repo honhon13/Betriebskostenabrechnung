@@ -53,6 +53,12 @@ export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(overflow, "Seite läuft horizontal über").toBeLessThanOrEqual(0);
 }
 
+/** `upper` steht im Formular oberhalb von `lower`. */
+export async function expectAbove(upper: Locator, lower: Locator): Promise<void> {
+  const [a, b] = await Promise.all([upper.boundingBox(), lower.boundingBox()]);
+  expect(a && b && a.y + a.height <= b.y, "Reihenfolge im Formular").toBe(true);
+}
+
 export const CURRENT_YEAR = new Date().getFullYear();
 export const RELEASED_YEAR = CURRENT_YEAR - 1;
 

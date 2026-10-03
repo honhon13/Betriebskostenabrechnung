@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, RELEASED_YEAR, login, openAdd, parseCents, tinyPdf } from "./helpers";
+import { CURRENT_YEAR, RELEASED_YEAR, expectAbove, login, openAdd, parseCents, tinyPdf } from "./helpers";
 
 // Prüf-Workflow: TOP 1 reicht ein, TOP 2 (ADMIN) prüft. Offiziell zählt nur Freigegebenes.
 const RUN = Date.now().toString(36);
@@ -63,6 +63,8 @@ test.describe.serial("Prüfung von USER-Eingaben", () => {
     // Umlageschlüssel und TOP-Zuordnung sind Sache der Verwaltung.
     await expect(dialog.locator('select[name="allocationKeyId"]')).toHaveCount(0);
     await expect(dialog.locator('input[name="unitIds"]')).toHaveCount(0);
+    // Auch beim Einreichen steht der Beleg-Upload ganz oben, vor den Eingabefeldern.
+    await expectAbove(dialog.getByLabel("Beleg hochladen"), dialog.getByLabel("Kostenart"));
     await dialog.getByLabel("Kostenart").selectOption({ label: "Rauchfangkehrer" });
     await dialog.getByLabel("Beschreibung").fill(COST);
     await dialog.getByLabel("Betrag (€)").fill("120,00");

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, login, openAdd, tinyPdf } from "./helpers";
+import { CURRENT_YEAR, expectAbove, login, openAdd, tinyPdf } from "./helpers";
 
 // OCR läuft gegen den Azure-Nachbau (e2e/mock-azure.mjs). Eine Marke im Dokument
 // bestimmt, was der Dienst „erkennt“.
@@ -18,6 +18,9 @@ const COST = `E2E Testkosten OCR ${RUN}`;
 const COST_FILE = `e2e-ocr-kostenbeleg-${RUN}.pdf`;
 const COST_UNREADABLE = `e2e-ocr-kostenbeleg-unlesbar-${RUN}.pdf`;
 const COST_DISCARDED = `e2e-ocr-kostenbeleg-verworfen-${RUN}.pdf`;
+const COST_PLAIN = `E2E Testkosten ohne OCR ${RUN}`;
+const COST_PLAIN_A = `e2e-ocr-kostenbeleg-ohne-a-${RUN}.pdf`;
+const COST_PLAIN_B = `e2e-ocr-kostenbeleg-ohne-b-${RUN}.pdf`;
 const PURPOSE = `E2E Einzahlung OCR ${RUN}`;
 const PROOF_FILE = `e2e-ocr-nachweis-${RUN}.pdf`;
 
@@ -225,16 +228,25 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
   test("Kostenformular: Beleg wählen → OCR füllt die Felder → prüfen → speichern", async () => {
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
     const dialog = await openAdd(page, "Kostenposition hinzufügen");
-    await expect(dialog.getByText("sofort per OCR ausgelesen")).toBeVisible();
+    // Der Beleg-Upload steht ganz oben – vor den Eingabefeldern – und ist wie der Upload-Dialog
+    // aufgebaut: Dateifeld für mehrere Dateien, OCR vorbelegt.
+    const picker = dialog.getByLabel("Beleg hochladen");
+    await expect(picker).toHaveAttribute("multiple", "");
+    const ocr = dialog.getByRole("checkbox", { name: "Automatisch per OCR auslesen" });
+    await expect(ocr).toBeChecked();
+    await expectAbove(picker, ocr);
+    await expectAbove(ocr, dialog.getByLabel("Kostenart"));
     // Die Rechnungsnummer ist von Hand eingetragen – sie bleibt stehen.
     await dialog.getByLabel("Rechnungsnummer").fill("EIGENE-NR");
-    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_FILE, "OCR-RECHNUNG"));
+    await picker.setInputFiles(pdf(COST_FILE, "OCR-RECHNUNG"));
 
     // Die erkannten Werte stehen vor dem Speichern in den Feldern …
     await expect(dialog.getByRole("status").filter({ hasText: COST_FILE })).toContainText(
       "Ausgelesen – übernommen: Rechnungssteller, Rechnungsdatum, Leistungszeitraum von, " +
         "Leistungszeitraum bis, Beschreibung, Netto, MwSt., Betrag (brutto)",
     );
+    await expect(dialog.getByText("1 Beleg hochgeladen")).toBeVisible();
+    await expect(dialog.getByLabel("Weiteren Beleg hochladen")).toBeVisible();
     await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("Rauchfangkehrer Muster GmbH");
     await expect(dialog.getByLabel("Rechnungsnummer")).toHaveValue("EIGENE-NR");
     await expect(dialog.getByLabel("Rechnungsdatum")).toHaveValue("2026-03-15");
@@ -277,8 +289,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
     await page.getByRole("button", { name: `${COST} bearbeiten` }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText("Weiteren Beleg anhängen")).toBeVisible();
-    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_UNREADABLE, "OCR-UNLESBAR"));
+    await dialog.getByLabel("Weiteren Beleg hochladen").setInputFiles(pdf(COST_UNREADABLE, "OCR-UNLESBAR"));
     await expect(dialog.getByRole("status").filter({ hasText: COST_UNREADABLE })).toContainText(
       "Gespeichert – OCR-Fehler",
     );
@@ -300,7 +311,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
   test("Kostenformular: Abbrechen oder Entfernen hinterlässt keinen verwaisten Beleg", async () => {
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
     const dialog = await openAdd(page, "Kostenposition hinzufügen");
-    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_DISCARDED, "OCR-RECHNUNG"));
+    await dialog.getByLabel("Beleg hochladen").setInputFiles(pdf(COST_DISCARDED, "OCR-RECHNUNG"));
     await expect(dialog.getByRole("status").filter({ hasText: COST_DISCARDED })).toContainText("Ausgelesen");
     // Entfernen löscht den Beleg; die übernommenen Werte bleiben zum Korrigieren stehen.
     await dialog.getByRole("button", { name: `${COST_DISCARDED} entfernen` }).click();
@@ -308,7 +319,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("Rauchfangkehrer Muster GmbH");
 
     // Noch einmal hochladen und dann abbrechen.
-    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_DISCARDED, "OCR-RECHNUNG"));
+    await dialog.getByLabel("Beleg hochladen").setInputFiles(pdf(COST_DISCARDED, "OCR-RECHNUNG"));
     await expect(dialog.getByRole("status").filter({ hasText: COST_DISCARDED })).toContainText("Ausgelesen");
     await dialog.getByRole("button", { name: "Abbrechen" }).click();
     await expect(dialog).toBeHidden();
@@ -319,6 +330,38 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
       await expect(row(page, COST_FILE)).toBeVisible();
       await expect(row(page, COST_DISCARDED)).toHaveCount(0, { timeout: 1000 });
     }).toPass({ timeout: 15_000 });
+  });
+
+  test("Kostenformular: mehrere Belege auf einmal; ohne Häkchen wird nur gespeichert", async () => {
+    await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
+    const dialog = await openAdd(page, "Kostenposition hinzufügen");
+    await dialog.getByRole("checkbox", { name: "Automatisch per OCR auslesen" }).uncheck();
+    await dialog
+      .getByLabel("Beleg hochladen")
+      .setInputFiles([pdf(COST_PLAIN_A, "OCR-RECHNUNG"), pdf(COST_PLAIN_B, "OCR-RECHNUNG")]);
+
+    // Beide sind gespeichert, aber nicht ausgelesen – die Felder bleiben leer.
+    await expect(dialog.getByText("2 Belege hochgeladen")).toBeVisible();
+    for (const name of [COST_PLAIN_A, COST_PLAIN_B]) {
+      await expect(dialog.getByRole("status").filter({ hasText: name })).toContainText("Gespeichert.");
+    }
+    await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("");
+    await expect(dialog.getByLabel("Betrag (€)")).toHaveValue("");
+
+    await dialog.getByLabel("Beschreibung").fill(COST_PLAIN);
+    await dialog.getByLabel("Betrag (€)").fill("10,00");
+    await dialog.getByRole("button", { name: "Speichern" }).click();
+    await expect(dialog).toBeHidden();
+
+    // Beide Originale hängen an der Position; ausgelesen wurde keines.
+    const costRow = row(page, COST_PLAIN);
+    await expect(costRow.getByRole("button", { name: COST_PLAIN_A })).toBeVisible();
+    await expect(costRow.getByRole("button", { name: COST_PLAIN_B })).toBeVisible();
+    await page.goto(`/dokumente?q=${RUN}`);
+    for (const name of [COST_PLAIN_A, COST_PLAIN_B]) {
+      await expect(row(page, name)).toContainText(COST_PLAIN);
+      await expect(row(page, name)).toContainText("Offen");
+    }
   });
 
   test("Einzahlungsformular: angehängter Nachweis wird ausgelesen", async () => {
@@ -355,6 +398,8 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
       USER_FILE,
       COST_FILE,
       COST_UNREADABLE,
+      COST_PLAIN_A,
+      COST_PLAIN_B,
       PROOF_FILE,
     ]) {
       await page.getByRole("button", { name: `${name} löschen` }).click();
@@ -363,8 +408,10 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     }
 
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
-    await page.getByRole("button", { name: `${COST} löschen` }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Löschen" }).click();
-    await expect(row(page, COST)).toHaveCount(0);
+    for (const cost of [COST, COST_PLAIN]) {
+      await page.getByRole("button", { name: `${cost} löschen` }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Löschen" }).click();
+      await expect(row(page, cost)).toHaveCount(0);
+    }
   });
 });

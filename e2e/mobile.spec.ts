@@ -1,6 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { CURRENT_YEAR, RELEASED_YEAR, expectNoHorizontalOverflow, login, openAdd } from "./helpers";
+import {
+  CURRENT_YEAR,
+  RELEASED_YEAR,
+  expectAbove,
+  expectNoHorizontalOverflow,
+  login,
+  openAdd,
+} from "./helpers";
 
 const RUN = Date.now().toString(36);
 const COST = `E2E Testkosten Foto ${RUN}`;
@@ -91,12 +98,19 @@ test.describe("Mobil", () => {
     await login(page, "top2");
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
     const dialog = await openAdd(page, "Kostenposition hinzufügen");
+    // Wie im Upload-Dialog: Kamera, Dateifeld und OCR-Häkchen stehen oben, vor den Eingabefeldern.
+    const camera = dialog.getByRole("button", { name: "Beleg fotografieren" });
+    const picker = dialog.getByLabel("Beleg hochladen");
+    const ocr = dialog.getByRole("checkbox", { name: "Automatisch per OCR auslesen" });
+    await expectAbove(camera, picker);
+    await expectAbove(picker, ocr);
+    await expectAbove(ocr, dialog.getByLabel("Kostenart"));
     await takePhoto(page, dialog, COST_PHOTO);
 
     // Das Foto ist gespeichert und ausgelesen; die erkannten Werte stehen in den Feldern.
-    await expect(dialog.getByRole("status").filter({ hasText: COST_PHOTO })).toContainText(
-      "Ausgelesen – übernommen",
-    );
+    const result = dialog.getByRole("status").filter({ hasText: COST_PHOTO });
+    await expect(result).toContainText("Ausgelesen – übernommen");
+    await expect(result).toBeInViewport();
     await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("Rauchfangkehrer Muster GmbH");
     await expect(dialog.getByLabel("Betrag (€)")).toHaveValue("214,80");
     await expect(dialog.getByLabel("Leistungszeitraum von")).toHaveValue("2026-01-01");

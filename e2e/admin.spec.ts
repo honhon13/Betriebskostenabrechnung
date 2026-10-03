@@ -155,7 +155,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     await dialog.getByLabel("Betrag (€)").fill("300,00");
     await dialog.getByLabel("Umlageschlüssel").selectOption({ label: "Gleiche Teile" });
     // Der Beleg wird sofort gespeichert; solange das läuft, ist „Speichern“ gesperrt.
-    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(INVOICE));
+    await dialog.getByLabel("Beleg hochladen").setInputFiles(pdf(INVOICE));
     await expect(dialog.getByRole("status").filter({ hasText: INVOICE })).toContainText("Ausgelesen");
     // Auf dem Desktop gibt es keine Kamera-Schaltfläche.
     await expect(dialog.getByRole("button", { name: "Beleg fotografieren" })).toBeHidden();

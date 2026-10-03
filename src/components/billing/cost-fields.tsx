@@ -68,8 +68,8 @@ const RECEIPT_FIELDS: ReceiptField[] = [
 
 /**
  * Formularfelder einer Kostenposition: Beleg, Kostenart, Rechnungsdaten, Umlageschlüssel und
- * TOP-Zuordnung. Die Verwaltung fotografiert bzw. wählt den Beleg zuerst – erkannte Werte
- * stehen dann schon in den Feldern.
+ * TOP-Zuordnung. Der Beleg-Upload steht immer ganz oben, vor den Eingabefeldern: die Verwaltung
+ * fotografiert bzw. wählt den Beleg zuerst – erkannte Werte stehen dann schon in den Feldern.
  */
 export function CostFields({
   periods,
@@ -110,11 +110,24 @@ export function CostFields({
     <>
       {capture ? (
         <ReceiptCapture
-          label={moreReceipts ? "Weiteren Beleg anhängen" : "Beleg"}
+          more={moreReceipts}
           fields={RECEIPT_FIELDS}
           ocr={ocrAvailable}
           onRecognized={() => setDetailsOpen(true)}
         />
+      ) : allowUpload ? (
+        <Field
+          label={moreReceipts ? "Weiteren Beleg hochladen" : "Beleg hochladen"}
+          name="file"
+          optional
+          hint={
+            `PDF oder Foto (JPEG, PNG, WebP, HEIC, TIFF) bis ${formatFileSize(MAX_UPLOAD_BYTES)}. ` +
+            "Größere Fotos werden automatisch verkleinert. Die Datei wird als Rechnung mit dieser " +
+            "Kostenposition verknüpft."
+          }
+        >
+          <input type="file" name="file" accept={UPLOAD_ACCEPT} className={fileInputClass} />
+        </Field>
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
@@ -275,17 +288,6 @@ export function CostFields({
       <Field label="Notiz" name="notes" optional>
         <Textarea name="notes" defaultValue={cost?.notes ?? ""} rows={2} />
       </Field>
-
-      {allowUpload && !capture ? (
-        <Field
-          label={moreReceipts ? "Weiteren Beleg anhängen" : "Beleg"}
-          name="file"
-          optional
-          hint={`PDF oder Foto bis ${formatFileSize(MAX_UPLOAD_BYTES)} – wird als Rechnung mit dieser Kostenposition verknüpft.`}
-        >
-          <input type="file" name="file" accept={UPLOAD_ACCEPT} className={fileInputClass} />
-        </Field>
-      ) : null}
     </>
   );
 }

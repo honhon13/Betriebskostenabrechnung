@@ -1,12 +1,13 @@
 "use client";
 
-import { Camera, CircleAlert, CircleCheck, LoaderCircle, TriangleAlert, X } from "lucide-react";
-import { use, useEffect, useRef, useState } from "react";
+import { Camera, CircleCheck, CircleX, LoaderCircle, TriangleAlert, X } from "lucide-react";
+import { use, useEffect, useId, useRef, useState } from "react";
 
 import { deleteDocumentAction } from "@/app/actions/documents";
 import { FormLifecycleContext } from "@/components/forms/action-form";
+import { Field } from "@/components/forms/field";
 import { Button } from "@/components/ui/button";
-import { fileInputClass } from "@/components/ui/input";
+import { Checkbox, fileInputClass } from "@/components/ui/input";
 import { MAX_UPLOAD_BYTES, UPLOAD_ACCEPT } from "@/lib/files";
 import { formatFileSize } from "@/lib/format";
 import { shrinkImage } from "@/lib/image-resize";
@@ -24,10 +25,11 @@ export interface ReceiptField {
 }
 
 interface ReceiptCaptureProps {
-  label: string;
+  /** Der Eintrag hat bereits Belege – das Dateifeld heißt dann „Weiteren Beleg hochladen“. */
+  more?: boolean;
   /** Formularfelder, in die erkannte Werte übernommen werden. */
   fields: ReceiptField[];
-  /** OCR ist eingerichtet: der Beleg wird beim Hochladen ausgelesen. */
+  /** OCR ist eingerichtet: Belege werden beim Hochladen ausgelesen, solange das Häkchen gesetzt ist. */
   ocr: boolean;
   /** `name` des Feldes mit dem Abrechnungsjahr, in dem der Beleg abgelegt wird. */
   periodField?: string;
@@ -53,7 +55,7 @@ interface Receipt {
 const TONE = {
   success: { icon: CircleCheck, className: "text-success" },
   warning: { icon: TriangleAlert, className: "text-warning" },
-  danger: { icon: CircleAlert, className: "text-danger" },
+  danger: { icon: CircleX, className: "text-danger" },
 };
 
 /** Trägt den Wert ein, wenn das Feld noch leer ist – Eingetragenes überschreibt die OCR nie. */
@@ -66,15 +68,17 @@ function fillIfEmpty(form: HTMLFormElement, name: string, value: string | null):
 }
 
 /**
- * Beleg im Formular fotografieren oder auswählen. Die Datei wird sofort als Dokument gespeichert
- * und – wenn OCR eingerichtet ist – ausgelesen; erkannte Werte stehen danach in den noch leeren
- * Formularfeldern und lassen sich vor dem Speichern prüfen und korrigieren. Beim Speichern
- * verknüpft das Formular die Belege über die versteckten Felder `documentIds`.
+ * Beleg-Upload am Anfang eines Formulars – aufgebaut wie der Dialog „Dokument hochladen“:
+ * Liste des Hochgeladenen, „Beleg fotografieren“, Dateifeld, OCR-Häkchen. Die Datei wird sofort
+ * als Dokument gespeichert und – wenn OCR eingerichtet und angehakt ist – ausgelesen; erkannte
+ * Werte stehen danach in den noch leeren Formularfeldern und lassen sich vor dem Speichern prüfen
+ * und korrigieren. Beim Speichern verknüpft das Formular die Belege über die versteckten Felder
+ * `documentIds`.
  *
  * Wird das Formular ohne Speichern geschlossen, verschwinden die hier hochgeladenen Belege wieder.
  */
 export function ReceiptCapture({
-  label,
+  more = false,
   fields,
   ocr,
   periodField = "periodId",
@@ -82,9 +86,15 @@ export function ReceiptCapture({
 }: ReceiptCaptureProps) {
   const lifecycle = use(FormLifecycleContext);
   const camera = useRef<HTMLInputElement>(null);
-  const picker = useRef<HTMLInputElement>(null);
+  const log = useRef<HTMLDivElement>(null);
+  const ocrHint = useId();
+  const [useOcr, setUseOcr] = useState(ocr);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{
+    current: number;
+    total: number;
+    fileName: string;
+  } | null>(null);
   const [removing, setRemoving] = useState(false);
   const nextKey = useRef(0);
 
@@ -101,6 +111,11 @@ export function ReceiptCapture({
     };
   }, []);
 
+  // Das Ergebnis steht oben im Formular – wer inzwischen weitergescrollt hat, sieht es sonst nicht.
+  useEffect(() => {
+    log.current?.scrollIntoView({ block: "nearest" });
+  }, [progress, receipts.length]);
+
   async function upload(form: HTMLFormElement, selected: File): Promise<Omit<Receipt, "key">> {
     const failed = (note: string) => ({ id: null, fileName: selected.name, tone: "danger" as const, note });
     try {
@@ -112,7 +127,7 @@ export function ReceiptCapture({
       body.set("file", file);
       body.set("type", "invoice");
       body.set("periodId", String(new FormData(form).get(periodField) ?? ""));
-      if (ocr) body.set("ocr", "on");
+      if (useOcr) body.set("ocr", "on");
 
       const response = await fetch("/api/dokumente", { method: "POST", body });
       if (!response.ok) {
@@ -162,7 +177,7 @@ export function ReceiptCapture({
     try {
       // Nacheinander: der erste Beleg füllt die Felder, weitere ergänzen nur noch Leeres.
       for (const [index, file] of files.entries()) {
-        setProgress({ current: index + 1, total: files.length });
+        setProgress({ current: index + 1, total: files.length, fileName: file.name });
         const receipt = await upload(form, file);
         setReceipts((current) => [...current, { ...receipt, key: nextKey.current++ }]);
       }
@@ -191,19 +206,68 @@ export function ReceiptCapture({
   }
 
   const busy = progress !== null || removing;
+  const stored = receipts.filter((receipt) => receipt.id !== null).length;
+  const failed = receipts.length - stored;
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-medium">{label}</span>
-        <span className="text-xs text-subtle">optional</span>
-      </div>
+    <div className="space-y-4">
+      {receipts.length > 0 || progress ? (
+        <div ref={log} className="rounded-lg border border-border">
+          <p className="border-b border-border px-3 py-2 text-sm font-medium">
+            {receipts.length === 0
+              ? "Beleg wird hochgeladen …"
+              : `${stored === 1 ? "1 Beleg" : `${stored} Belege`} hochgeladen` +
+                (failed > 0 ? ` · ${failed} nicht gespeichert` : "")}
+          </p>
+          <ul className="max-h-60 divide-y divide-border overflow-y-auto text-sm">
+            {receipts.map((receipt) => {
+              const tone = TONE[receipt.tone];
+              return (
+                <li key={receipt.key} className="flex items-start gap-2 px-3 py-2">
+                  <tone.icon className={cn("mt-0.5 size-4 shrink-0", tone.className)} aria-hidden />
+                  <span className="min-w-0 flex-1" role={receipt.tone === "danger" ? "alert" : "status"}>
+                    <span className="block font-medium wrap-anywhere">{receipt.fileName}</span>
+                    <span className="block text-muted">{receipt.note}</span>
+                  </span>
+                  {receipt.id === null ? null : (
+                    <input type="hidden" name="documentIds" value={receipt.id} />
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`${receipt.fileName} entfernen`}
+                    title="Entfernen"
+                    onClick={() => remove(receipt)}
+                    disabled={busy}
+                    className="disabled:opacity-50 -mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <X className="size-4" aria-hidden />
+                  </button>
+                </li>
+              );
+            })}
+            {progress ? (
+              <li className="flex items-start gap-2 px-3 py-2" role="status">
+                <LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin text-muted" aria-hidden />
+                <span className="min-w-0">
+                  <span className="block font-medium wrap-anywhere">{progress.fileName}</span>
+                  <span className="block text-muted">
+                    {progress.total > 1
+                      ? `Beleg ${progress.current} von ${progress.total} wird`
+                      : "Wird"}{" "}
+                    gespeichert{useOcr ? " und ausgelesen – das dauert einige Sekunden" : ""} …
+                  </span>
+                </span>
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
 
-      {/* Auf dem Handy untereinander: die Dateiauswahl braucht die volle Breite. */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {/* Nur auf Handy und Tablet sichtbar: Kamera öffnen, Foto wird sofort hochgeladen. */}
+      <div className="camera-only w-full flex-col gap-1.5">
         <Button
           variant="secondary"
-          className="camera-only"
+          className="w-full"
           onClick={() => camera.current?.click()}
           disabled={busy}
         >
@@ -222,61 +286,52 @@ export function ReceiptCapture({
           disabled={busy}
           onChange={(event) => capture(event.currentTarget)}
         />
+        <p className="text-xs text-subtle">
+          Das Foto wird sofort gespeichert
+          {useOcr ? " und ausgelesen – danach kannst du die erkannten Daten prüfen" : ""}. Oder
+          wähle unten eine Datei.
+        </p>
+      </div>
+
+      {/* Ohne `name`: die Datei geht nicht mit dem Formular mit, sondern sofort an /api/dokumente. */}
+      <Field
+        label={more || stored > 0 ? "Weiteren Beleg hochladen" : "Beleg hochladen"}
+        name="documentIds"
+        optional
+        hint={
+          `PDF oder Foto (JPEG, PNG, WebP, HEIC, TIFF) bis ${formatFileSize(MAX_UPLOAD_BYTES)} je Datei – ` +
+          "auch mehrere auf einmal. Größere Fotos werden automatisch verkleinert. Jede Datei wird sofort " +
+          `als Rechnung gespeichert${useOcr ? " und ausgelesen" : ""} und beim Speichern mit dem Eintrag verknüpft.`
+        }
+      >
         <input
-          ref={picker}
           type="file"
           accept={UPLOAD_ACCEPT}
           multiple
-          aria-label="Beleg auswählen"
-          className={cn(fileInputClass, "min-w-0 sm:flex-1")}
+          className={fileInputClass}
           disabled={busy}
           onChange={(event) => capture(event.currentTarget)}
         />
-      </div>
+      </Field>
 
-      <p className="text-xs text-subtle">
-        PDF oder Foto bis {formatFileSize(MAX_UPLOAD_BYTES)} – wird als Rechnung gespeichert
-        {ocr
-          ? " und sofort per OCR ausgelesen. Erkannte Werte füllen die leeren Felder; du kannst sie vor dem Speichern prüfen und korrigieren."
-          : " und beim Speichern mit dem Eintrag verknüpft."}
-      </p>
-
-      {progress ? (
-        <p className="flex items-center gap-2 text-sm text-muted" role="status">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden />
-          {progress.total > 1 ? `Beleg ${progress.current} von ${progress.total} wird` : "Beleg wird"}{" "}
-          gespeichert{ocr ? " und ausgelesen – das dauert einige Sekunden" : ""} …
-        </p>
-      ) : null}
-
-      {receipts.length > 0 ? (
-        <ul className="divide-y divide-border rounded-lg border border-border text-sm">
-          {receipts.map((receipt) => {
-            const tone = TONE[receipt.tone];
-            return (
-              <li key={receipt.key} className="flex items-start gap-2 px-3 py-2">
-                <tone.icon className={cn("mt-0.5 size-4 shrink-0", tone.className)} aria-hidden />
-                <span className="min-w-0 flex-1" role={receipt.tone === "danger" ? "alert" : "status"}>
-                  <span className="block font-medium wrap-anywhere">{receipt.fileName}</span>
-                  <span className="block text-muted">{receipt.note}</span>
-                </span>
-                {receipt.id === null ? null : (
-                  <input type="hidden" name="documentIds" value={receipt.id} />
-                )}
-                <button
-                  type="button"
-                  aria-label={`${receipt.fileName} entfernen`}
-                  title="Entfernen"
-                  onClick={() => remove(receipt)}
-                  disabled={busy}
-                  className="disabled:opacity-50 -mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                >
-                  <X className="size-4" aria-hidden />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+      {ocr ? (
+        <div className="rounded-lg border border-border bg-surface-muted px-3 py-2.5 text-sm">
+          {/* Der Erklärtext steht außerhalb des Labels, damit das Kästchen kurz „OCR auslesen“ heißt. */}
+          <label className="flex items-center gap-2 font-medium">
+            <Checkbox
+              checked={useOcr}
+              onChange={(event) => setUseOcr(event.target.checked)}
+              disabled={busy}
+              aria-describedby={ocrHint}
+            />
+            Automatisch per OCR auslesen
+          </label>
+          <p id={ocrHint} className="mt-1 pl-6 text-xs text-muted">
+            Rechnungssteller, Rechnungsnummer, Datum, Leistungszeitraum, Beträge und Beschreibung
+            werden erkannt und in leere Felder übernommen. Die Datei wird dazu an Azure Document
+            Intelligence übertragen.
+          </p>
+        </div>
       ) : null}
     </div>
   );

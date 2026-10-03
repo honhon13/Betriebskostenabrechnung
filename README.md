@@ -36,8 +36,9 @@ Aktion des jeweiligen Bereichs zuerst, auf dem Handy als Auswahl von unten:
   von „Meine Eingaben" ein, führt der Dialog danach dorthin.
 - **Mehrere Dokumente.** Der Upload-Dialog nimmt mehrere Dateien auf einmal und bleibt nach jedem
   Upload offen; er führt Buch, was gespeichert wurde und was nicht.
-- **Beleg zuerst.** Im Kostenformular steht der Beleg oben: fotografieren oder Datei wählen, die
-  OCR füllt die Felder, prüfen, speichern (siehe „Beleg im Kostenformular").
+- **Beleg zuerst.** Im Kostenformular steht der Beleg-Upload ganz oben, vor den Eingabefeldern,
+  und ist wie der Upload-Dialog aufgebaut: fotografieren oder Dateien wählen, die OCR füllt die
+  Felder, prüfen, speichern (siehe „Beleg im Kostenformular").
 - **Beleg fotografieren.** Auf Handy und Tablet öffnet die Schaltfläche im Kostenformular und im
   Upload-Dialog direkt die Kamera; das Foto wird sofort gespeichert und ausgelesen.
 - **Was nicht geht, steht mit Begründung im Menü.** Kosten lassen sich nur in Jahren im Entwurf
@@ -254,12 +255,17 @@ und Dateien bis 4 MB.
 
 ### Beleg im Kostenformular
 
+Der Beleg-Upload steht im Kostenformular ganz oben und ist wie der Dialog „Dokument hochladen"
+aufgebaut: Liste des Hochgeladenen, „Beleg fotografieren" (Handy/Tablet), Dateifeld für mehrere
+Dateien und das Häkchen „Automatisch per OCR auslesen" (vorbelegt). Anders als dort gibt es
+keine eigene Schaltfläche zum Hochladen – die Auswahl der Datei startet den Upload.
+
 Im Kostenformular der Verwaltung läuft die OCR **vor** dem Speichern:
 
 1. Beleg fotografieren (Handy/Tablet) oder Datei wählen – auch mehrere.
-2. Die Datei wird sofort als Dokument gespeichert und ausgelesen (derselbe Weg wie beim
-   Dokument-Upload: `POST /api/dokumente`, `OCRService`). Solange das läuft, ist „Speichern"
-   gesperrt.
+2. Die Datei wird sofort als Dokument gespeichert und – solange das Häkchen gesetzt ist –
+   ausgelesen (derselbe Weg wie beim Dokument-Upload: `POST /api/dokumente`, `OCRService`).
+   Solange das läuft, ist „Speichern" gesperrt.
 3. Erkannte Werte stehen in den noch leeren Feldern: Rechnungssteller, Rechnungsnummer,
    Rechnungsdatum, Leistungszeitraum, Beschreibung, Netto, MwSt. und Betrag (brutto). Nicht
    Erkanntes bleibt leer.
@@ -276,7 +282,8 @@ Speichern ausgelesen; erkannte Werte ergänzen dort nur das Dokument.
 
 Von USER eingereichte Dokumente und Belege werden nicht automatisch ausgelesen (OCR setzt das
 Recht `document:ocr` voraus); die Verwaltung kann sie per Schaltfläche auslesen. Ihr Beleg im
-Kostenformular geht deshalb wie bisher erst beim Einreichen mit.
+Kostenformular geht deshalb wie bisher erst beim Einreichen mit – das Dateifeld steht aber auch
+dort ganz oben.
 
 ## Deployment auf Vercel
 
