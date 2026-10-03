@@ -1,4 +1,4 @@
-import { eq, like } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 import { createPool } from "../src/db/connection";
@@ -19,10 +19,9 @@ export default async function globalSetup() {
     await db.delete(schema.costs).where(like(schema.costs.description, "E2E Testkosten %"));
     await db.delete(schema.payments).where(like(schema.payments.purpose, "E2E Einzahlung %"));
     await db.delete(schema.users).where(like(schema.users.username, "e2e-%"));
-    // Das Folgejahr legt nur ein Test an – ein Rest davon würde den nächsten Lauf stören.
-    await db
-      .delete(schema.billingPeriods)
-      .where(eq(schema.billingPeriods.year, new Date().getFullYear() + 1));
+    // Folgejahre legen nur Tests an – ein Rest davon würde den nächsten Lauf stören.
+    const year = new Date().getFullYear();
+    await db.delete(schema.billingPeriods).where(inArray(schema.billingPeriods.year, [year + 1, year + 2]));
     await db
       .update(schema.billingPeriods)
       .set({ status: "draft", releasedAt: null, releasedBy: null })

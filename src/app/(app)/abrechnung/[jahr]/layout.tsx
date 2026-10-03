@@ -9,6 +9,7 @@ import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { Tabs, type TabItem } from "@/components/layout/tabs";
 import { YearSelect } from "@/components/layout/year-select";
+import { ReviewFlag } from "@/components/review/review-badge";
 import { ButtonLink } from "@/components/ui/button";
 import { NoAccess } from "@/components/ui/no-access";
 import { PageHeader } from "@/components/ui/page";
@@ -50,6 +51,7 @@ export default async function BillingYearLayout({
           <span className="flex flex-wrap items-center gap-2">
             {formatDate(period.startDate)} – {formatDate(period.endDate)}
             <PeriodStatusBadge status={period.status} />
+            <ReviewFlag status={period.reviewStatus} />
             {released && period.releasedAt ? (
               <span>seit {formatDateTime(period.releasedAt)}</span>
             ) : null}

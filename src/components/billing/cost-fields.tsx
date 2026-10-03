@@ -18,9 +18,28 @@ interface CostFieldsProps {
   allocationKeys: AllocationKeyDto[];
   units: UnitDto[];
   /** Vorhandene Kostenposition beim Bearbeiten. */
-  cost?: CostDto;
+  cost?: Pick<
+    CostDto,
+    | "periodId"
+    | "categoryId"
+    | "description"
+    | "amountCents"
+    | "costDate"
+    | "supplier"
+    | "invoiceNumber"
+    | "notes"
+    | "documents"
+  > &
+    Partial<Pick<CostDto, "allocationKeyId" | "unitIds">>;
   /** Beleg-Upload anbieten (setzt das Recht zum Hochladen voraus). */
   allowUpload?: boolean;
+  /** OCR ist eingerichtet – der Beleg wird beim Speichern automatisch ausgelesen. */
+  ocrAvailable?: boolean;
+  /**
+   * Einreichen durch Benutzer: Umlageschlüssel und TOP-Zuordnung legt die Verwaltung bei
+   * der Prüfung fest und stehen daher nicht im Formular.
+   */
+  submission?: boolean;
 }
 
 /** Formularfelder einer Kostenposition: Kostenart, Betrag, Umlageschlüssel und TOP-Zuordnung. */
@@ -32,6 +51,8 @@ export function CostFields({
   units,
   cost,
   allowUpload = false,
+  ocrAvailable = false,
+  submission = false,
 }: CostFieldsProps) {
   // Inaktive Einträge nur anbieten, wenn die Position sie bereits verwendet.
   const categoryOptions = categories.filter((c) => c.isActive || c.id === cost?.categoryId);
@@ -65,7 +86,15 @@ export function CostFields({
           </Select>
         </Field>
         <Field label="Abrechnungsjahr" name="periodId">
-          <Select name="periodId" defaultValue={cost?.periodId ?? periodId} required>
+          {/* Eingereichte Positionen bleiben beim Bearbeiten in ihrem Jahr. */}
+          <Select
+            name="periodId"
+            defaultValue={cost?.periodId ?? periodId}
+            required
+            aria-readonly={submission && Boolean(cost)}
+            className={submission && cost ? "pointer-events-none opacity-70" : undefined}
+            tabIndex={submission && cost ? -1 : undefined}
+          >
             {periods.map((period) => (
               <option key={period.id} value={period.id}>
                 {period.year}
@@ -103,50 +132,54 @@ export function CostFields({
         </Field>
       </div>
 
-      <Field
-        label="Umlageschlüssel"
-        name="allocationKeyId"
-        hint="Bestimmt, in welchem Verhältnis der Betrag auf die TOPs verteilt wird."
-      >
-        <Select
+      {submission ? null : (
+        <>
+        <Field
+          label="Umlageschlüssel"
           name="allocationKeyId"
-          value={keyId}
-          onChange={(event) => {
-            setKeyId(Number(event.target.value));
-            setKeyTouched(true);
-          }}
-          required
+          hint="Bestimmt, in welchem Verhältnis der Betrag auf die TOPs verteilt wird."
         >
-          {keyOptions.map((key) => (
-            <option key={key.id} value={key.id}>
-              {key.name}
-              {key.unitLabel ? ` (${key.unitLabel})` : ""}
-            </option>
-          ))}
-        </Select>
-      </Field>
+          <Select
+            name="allocationKeyId"
+            value={keyId}
+            onChange={(event) => {
+              setKeyId(Number(event.target.value));
+              setKeyTouched(true);
+            }}
+            required
+          >
+            {keyOptions.map((key) => (
+              <option key={key.id} value={key.id}>
+                {key.name}
+                {key.unitLabel ? ` (${key.unitLabel})` : ""}
+              </option>
+            ))}
+          </Select>
+        </Field>
 
-      <fieldset className="space-y-1.5">
-        <legend className="text-sm font-medium">TOP-Zuordnung</legend>
-        <div className="flex flex-wrap gap-2">
-          {units.map((unit) => (
-            <label
-              key={unit.id}
-              className="flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-border-strong px-3 text-sm has-checked:border-primary has-checked:bg-primary-soft"
-            >
-              <Checkbox
-                name="unitIds"
-                value={unit.id}
-                defaultChecked={cost ? cost.unitIds.includes(unit.id) : true}
-              />
-              {unit.name}
-            </label>
-          ))}
-        </div>
-        <p className="text-xs text-subtle">
-          Nur die ausgewählten TOPs tragen diese Kosten. Eine einzelne TOP = direkte Zuordnung.
-        </p>
-      </fieldset>
+        <fieldset className="space-y-1.5">
+          <legend className="text-sm font-medium">TOP-Zuordnung</legend>
+          <div className="flex flex-wrap gap-2">
+            {units.map((unit) => (
+              <label
+                key={unit.id}
+                className="flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-border-strong px-3 text-sm has-checked:border-primary has-checked:bg-primary-soft"
+              >
+                <Checkbox
+                  name="unitIds"
+                  value={unit.id}
+                  defaultChecked={cost?.unitIds ? cost.unitIds.includes(unit.id) : true}
+                />
+                {unit.name}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-subtle">
+            Nur die ausgewählten TOPs tragen diese Kosten. Eine einzelne TOP = direkte Zuordnung.
+          </p>
+        </fieldset>
+        </>
+      )}
 
       <Field label="Notiz" name="notes" optional>
         <Textarea name="notes" defaultValue={cost?.notes ?? ""} rows={2} />
@@ -157,7 +190,11 @@ export function CostFields({
           label={cost && cost.documents.length > 0 ? "Weiteren Beleg anhängen" : "Beleg"}
           name="file"
           optional
-          hint={`PDF oder Foto bis ${formatFileSize(MAX_UPLOAD_BYTES)} – wird als Rechnung mit dieser Kostenposition verknüpft.`}
+          hint={`PDF oder Foto bis ${formatFileSize(MAX_UPLOAD_BYTES)} – wird als Rechnung mit dieser Kostenposition verknüpft${
+            ocrAvailable
+              ? " und automatisch per OCR ausgelesen. Leere Felder (Datum, Lieferant, Rechnungsnummer) werden ergänzt."
+              : "."
+          }`}
         >
           <input type="file" name="file" accept={UPLOAD_ACCEPT} className={fileInputClass} />
         </Field>

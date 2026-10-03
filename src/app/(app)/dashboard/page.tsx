@@ -3,10 +3,13 @@ import {
   CalendarRange,
   ChevronRight,
   CircleCheck,
+  CircleX,
+  ClipboardCheck,
   Clock,
   FileQuestion,
   FileText,
   Files,
+  Hourglass,
   PieChart,
   ReceiptText,
   Scale,
@@ -22,9 +25,10 @@ import { can, getDataScope } from "@/auth/rbac";
 import { BalanceBadge, balanceLabel } from "@/components/billing/balance-badge";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { CategoryBars } from "@/components/dashboard/category-bars";
+import { CostTrendChart } from "@/components/dashboard/cost-trend-chart";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { DocumentPreviewButton } from "@/components/documents/document-preview";
-import { YearSelect } from "@/components/layout/year-select";
+import { NavSelect, YearSelect } from "@/components/layout/year-select";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -33,7 +37,9 @@ import { EmptyState, PageHeader } from "@/components/ui/page";
 import { formatCents, formatDate, formatDateTime, formatPercent } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
 import { getDashboard, type Activity } from "@/services/dashboard.service";
+import { getCostTrend } from "@/services/overview.service";
 import { listPeriods, pickDefaultPeriod } from "@/services/periods.service";
+import { countOwnOpenSubmissions, countPendingReviews } from "@/services/review.service";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -49,6 +55,9 @@ const ACTIVITY_LABEL: Record<Activity["kind"], string> = {
   document: "Dokument hochgeladen",
 };
 
+/** Wert von ?verlauf= für die Ansicht über alle Abrechnungsjahre. */
+const TREND_ALL = "jahre";
+
 interface OpenRow {
   icon: LucideIcon;
   label: string;
@@ -60,7 +69,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
   const user = await requireUser();
   if (!can(user, "dashboard:view") || !can(user, "period:read")) return <NoAccess />;
 
-  const { jahr } = await searchParams;
+  const { jahr, verlauf } = await searchParams;
   const periods = await listPeriods(user);
   const period = periods.find((p) => p.year === Number(jahr)) ?? pickDefaultPeriod(periods);
   const scope = getDataScope(user);
@@ -88,13 +97,54 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
     );
   }
 
-  const data = await getDashboard(user, period.id);
+  // Zeitraum des Kostenverlaufs: ?verlauf=jahre zeigt alle Jahre, ?verlauf=2025 die Monate
+  // dieses Jahres – ohne Angabe die Monate des oben gewählten Abrechnungsjahres.
+  const trendPeriod =
+    verlauf === TREND_ALL ? null : (periods.find((p) => String(p.year) === verlauf) ?? period);
+
+  const reviews = can(user, "review:manage");
+  const [data, trend, pendingReviews, ownOpen] = await Promise.all([
+    getDashboard(user, period.id),
+    can(user, "cost:read") ? getCostTrend(user, trendPeriod) : null,
+    reviews ? countPendingReviews(user) : 0,
+    reviews ? null : countOwnOpenSubmissions(user),
+  ]);
   const own = !scope.allUnits;
   const year = period.year;
   const { openItems } = data;
 
   // Offene Positionen: nur Zeilen, bei denen wirklich etwas zu tun ist.
   const openRows: OpenRow[] = [
+    ...(pendingReviews > 0
+      ? [
+          {
+            icon: ClipboardCheck,
+            label: `${pendingReviews === 1 ? "Eingereichter Eintrag wartet" : "Eingereichte Einträge warten"} auf Prüfung`,
+            value: String(pendingReviews),
+            href: "/pruefung",
+          },
+        ]
+      : []),
+    ...(ownOpen && ownOpen.pending > 0
+      ? [
+          {
+            icon: Hourglass,
+            label: `Eigene ${ownOpen.pending === 1 ? "Eingabe wartet" : "Eingaben warten"} auf Prüfung`,
+            value: String(ownOpen.pending),
+            href: "/eingaben",
+          },
+        ]
+      : []),
+    ...(ownOpen && ownOpen.rejected > 0
+      ? [
+          {
+            icon: CircleX,
+            label: `Eigene ${ownOpen.rejected === 1 ? "Eingabe wurde" : "Eingaben wurden"} abgelehnt`,
+            value: String(ownOpen.rejected),
+            href: "/eingaben",
+          },
+        ]
+      : []),
     ...openItems.unitsWithBalanceDue.map((balance) => ({
       icon: TriangleAlert,
       label: own ? "Nachzahlung offen" : `Nachzahlung ${balance.unitName}`,
@@ -224,6 +274,39 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
               : `${openItems.costsWithoutDocument} ${openItems.costsWithoutDocument === 1 ? "Position" : "Positionen"} ohne Beleg`}
         </StatTile>
       </div>
+
+      {trend ? (
+        <Card>
+          <CardHeader
+            title="Kostenverlauf"
+            description={
+              (trendPeriod
+                ? `Kosten je Monat im Abrechnungsjahr ${trendPeriod.year} (nach Rechnungsdatum)`
+                : "Kosten je Abrechnungsjahr") +
+              (own ? " – dein Anteil." : " – gestapelt nach TOP.") +
+              ` Summe ${formatCents(trend.totalCents)}.`
+            }
+            action={
+              <NavSelect
+                label="Zeitraum des Kostenverlaufs"
+                value={trendPeriod ? String(trendPeriod.year) : TREND_ALL}
+                options={[
+                  ...periods.map((p) => ({ value: String(p.year), label: `Monate ${p.year}` })),
+                  { value: TREND_ALL, label: "Alle Jahre" },
+                ]}
+                hrefPattern={`/dashboard?jahr=${year}&verlauf={value}`}
+              />
+            }
+          />
+          <CardContent>
+            {trend.totalCents === 0 ? (
+              <p className="text-sm text-muted">Für diesen Zeitraum sind noch keine Kosten erfasst.</p>
+            ) : (
+              <CostTrendChart trend={trend} singleLabel={own ? "Mein Kostenanteil" : "Kosten gesamt"} />
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

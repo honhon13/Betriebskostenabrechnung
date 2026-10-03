@@ -1,4 +1,4 @@
-import { Download, Files, Pencil, ScanText, Search, Trash2, X } from "lucide-react";
+import { Download, Files, Pencil, ScanText, Search, Send, Trash2, X } from "lucide-react";
 import Link from "next/link";
 
 import {
@@ -34,6 +34,7 @@ import type { DocumentDto, OcrFields, PeriodDto } from "@/types/billing";
 import { DocumentFields, type DocumentFormOptions } from "./document-fields";
 import { DocumentPreviewButton } from "./document-preview";
 import { OcrStatusBadge } from "./ocr-status";
+import { ReviewFlag } from "../review/review-badge";
 import { DocumentUploadDialog } from "./document-upload";
 
 const ALL = "alle";
@@ -147,7 +148,12 @@ export async function DocumentManager({
     {
       key: "type",
       header: "Typ",
-      cell: (document) => <Badge tone="primary">{DOCUMENT_TYPE_LABELS[document.type]}</Badge>,
+      cell: (document) => (
+        <span className="inline-flex flex-wrap justify-end gap-1 md:justify-start">
+          <Badge tone="primary">{DOCUMENT_TYPE_LABELS[document.type]}</Badge>
+          <ReviewFlag status={document.reviewStatus} />
+        </span>
+      ),
     },
     ...(lockedPeriod
       ? []
@@ -255,6 +261,11 @@ export async function DocumentManager({
                 lockPeriod={Boolean(lockedPeriod)}
                 ocrAvailable={canOcr && ocrAvailable}
               />
+            ) : !canWrite && can(user, "document:submit") ? (
+              <Link href="/eingaben" className={buttonClass("secondary", "md")}>
+                <Send aria-hidden />
+                Dokument einreichen
+              </Link>
             ) : null
           }
         />

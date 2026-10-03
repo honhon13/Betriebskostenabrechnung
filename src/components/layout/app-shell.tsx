@@ -2,11 +2,13 @@
 
 import {
   Building2,
+  ClipboardCheck,
   Files,
   LayoutDashboard,
   LogOut,
   Menu,
   ReceiptText,
+  Send,
   Settings,
   Wallet,
   X,
@@ -22,6 +24,8 @@ interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  /** Zähler am Eintrag, z. B. Einträge, die auf Prüfung warten. */
+  badge?: number;
 }
 
 const MAIN_NAV: NavItem[] = [
@@ -55,18 +59,37 @@ function NavLink({ item, onNavigate }: { item: NavItem; onNavigate: () => void }
       )}
     >
       <Icon aria-hidden />
-      {item.label}
+      <span className="flex-1">{item.label}</span>
+      {item.badge ? (
+        <span
+          className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground tabular-nums"
+          aria-label={`${item.badge} offen`}
+        >
+          {item.badge}
+        </span>
+      ) : null}
     </Link>
   );
 }
 
 interface AppShellProps {
   user: { displayName: string; roleName: string; unitName: string | null };
+  /** Prüfliste der Verwaltung mit Zahl der wartenden Einträge – null, wenn der Benutzer nicht prüft. */
+  review: { pending: number } | null;
+  /** „Meine Eingaben“ für Benutzer, die Einträge einreichen dürfen. */
+  submissions: boolean;
   logoutAction: () => Promise<void>;
   children: ReactNode;
 }
 
-export function AppShell({ user, logoutAction, children }: AppShellProps) {
+export function AppShell({ user, review, submissions, logoutAction, children }: AppShellProps) {
+  const nav: NavItem[] = [
+    ...MAIN_NAV,
+    ...(review
+      ? [{ href: "/pruefung", label: "Prüfung", icon: ClipboardCheck, badge: review.pending }]
+      : []),
+    ...(submissions ? [{ href: "/eingaben", label: "Meine Eingaben", icon: Send }] : []),
+  ];
   // Nur für das Handy relevant: ab lg ist die Sidebar immer sichtbar.
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
@@ -120,7 +143,7 @@ export function AppShell({ user, logoutAction, children }: AppShellProps) {
         </div>
 
         <nav aria-label="Hauptnavigation" className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
-          {MAIN_NAV.map((item) => (
+          {nav.map((item) => (
             <NavLink key={item.href} item={item} onNavigate={close} />
           ))}
         </nav>

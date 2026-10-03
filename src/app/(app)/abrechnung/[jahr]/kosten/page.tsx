@@ -7,6 +7,7 @@ import { CostFields } from "@/components/billing/cost-fields";
 import { DocumentChips } from "@/components/documents/document-preview";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
+import { ReviewFlag } from "@/components/review/review-badge";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -15,12 +16,16 @@ import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
 import { formatCents, formatDate } from "@/lib/format";
 import { listCosts } from "@/services/costs.service";
+import { isOcrAvailable } from "@/services/documents.service";
 import { listAllocationKeys, listCategories, listUnits } from "@/services/masterdata.service";
 import { loadPeriodPage } from "@/services/page-context";
 import { listPeriods } from "@/services/periods.service";
 import type { CostDto } from "@/types/billing";
 
 export const metadata: Metadata = { title: "Kosten" };
+
+// Beim Speichern mit Beleg läuft die OCR mit – sie wartet auf Azure.
+export const maxDuration = 60;
 
 export default async function CostsPage({
   params,
@@ -43,12 +48,16 @@ export default async function CostsPage({
     .filter((p) => p.status === "draft")
     .map((p) => ({ id: p.id, year: p.year }));
   const allowUpload = can(user, "document:write");
+  const ocrAvailable = can(user, "document:ocr") && isOcrAvailable();
 
   const draft = period.status === "draft";
   const canWrite = draft && can(user, "cost:write");
   const canDelete = draft && can(user, "cost:delete");
   const unitName = new Map(units.map((unit) => [unit.id, unit.name]));
-  const total = costs.reduce((acc, cost) => acc + cost.amountCents, 0);
+  // Eingereichte, noch nicht freigegebene Positionen stehen in der Liste, zählen aber nicht mit.
+  const official = costs.filter((cost) => cost.reviewStatus === "approved");
+  const total = official.reduce((acc, cost) => acc + cost.amountCents, 0);
+  const unreviewed = costs.length - official.length;
 
   const columns: Column<CostDto>[] = [
     { key: "date", header: "Datum", cell: (cost) => formatDate(cost.costDate), className: "whitespace-nowrap" },
@@ -62,6 +71,11 @@ export default async function CostsPage({
           <span className="block text-xs text-muted">
             {[cost.categoryName, cost.supplier].filter(Boolean).join(" · ")}
           </span>
+          {cost.reviewStatus !== "approved" ? (
+            <span className="mt-1 block">
+              <ReviewFlag status={cost.reviewStatus} />
+            </span>
+          ) : null}
         </>
       ),
     },
@@ -114,6 +128,7 @@ export default async function CostsPage({
         allocationKeys={allocationKeys}
         units={units}
         allowUpload={allowUpload}
+        ocrAvailable={ocrAvailable}
       />
     </FormDialog>
   ) : null;
@@ -132,7 +147,10 @@ export default async function CostsPage({
       <Card>
         <CardHeader
           title="Kostenpositionen"
-          description={`${costs.length} ${costs.length === 1 ? "Position" : "Positionen"} · ${formatCents(total)}`}
+          description={
+            `${official.length} ${official.length === 1 ? "Position" : "Positionen"} · ${formatCents(total)}` +
+            (unreviewed > 0 ? ` · ${unreviewed} eingereicht, nicht freigegeben` : "")
+          }
           action={createDialog}
         />
         {costs.length === 0 ? (
@@ -153,6 +171,7 @@ export default async function CostsPage({
                 <>
                   {cost.description}
                   <span className="block text-xs font-normal text-muted">{cost.categoryName}</span>
+                  <ReviewFlag status={cost.reviewStatus} />
                 </>
               )}
               mobileValue={(cost) => formatCents(cost.amountCents)}
@@ -177,6 +196,7 @@ export default async function CostsPage({
                               units={units}
                               cost={cost}
                               allowUpload={allowUpload}
+                              ocrAvailable={ocrAvailable}
                             />
                           </FormDialog>
                         ) : null}
@@ -203,7 +223,7 @@ export default async function CostsPage({
               footer={
                 <tr className="font-semibold">
                   <td colSpan={5} className="px-3 py-2.5 pl-5">
-                    Summe
+                    Summe{unreviewed > 0 ? " (freigegebene Positionen)" : ""}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{formatCents(total)}</td>
                   {canWrite || canDelete ? <td /> : null}

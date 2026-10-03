@@ -1,4 +1,4 @@
-import { CircleCheck, CircleX, Clock, Pencil, Plus, Trash2, Wallet } from "lucide-react";
+import { CircleCheck, CircleX, Clock, Pencil, Plus, Send, Trash2, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 
 import {
@@ -14,13 +14,16 @@ import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { NavSelect } from "@/components/layout/year-select";
 import { PaymentFields } from "@/components/payments/payment-fields";
+import { ReviewFlag } from "@/components/review/review-badge";
 import { Badge } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { formatCents, formatDate, todayIso } from "@/lib/format";
 import { PAYMENT_STATUS_LABELS, PAYMENT_STATUSES } from "@/lib/labels";
+import { isOcrAvailable } from "@/services/documents.service";
 import { listUnits } from "@/services/masterdata.service";
 import { listPayments } from "@/services/payments.service";
 import { listPeriods, pickDefaultPeriod } from "@/services/periods.service";
@@ -28,6 +31,9 @@ import { getStatement } from "@/services/statement.service";
 import type { PaymentDto, PaymentStatus } from "@/types/billing";
 
 export const metadata: Metadata = { title: "Einzahlungen" };
+
+// Beim Speichern mit Beleg läuft die OCR mit – sie wartet auf Azure.
+export const maxDuration = 60;
 
 const ALL = "alle";
 
@@ -79,13 +85,14 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
   ]);
   // Summe der eingegangenen Zahlungen – offene und stornierte zählen nicht mit.
   const total = payments
-    .filter((payment) => payment.status === "received")
+    .filter((payment) => payment.status === "received" && payment.reviewStatus === "approved")
     .reduce((acc, payment) => acc + payment.amountCents, 0);
   const balances = (statement?.balances ?? []).filter((b) => !unit || b.unitId === unit.id);
 
   const canWrite = can(user, "payment:write") && periods.length > 0 && units.length > 0;
   const canDelete = can(user, "payment:delete");
   const allowUpload = scope.allUnits && can(user, "document:write");
+  const ocrAvailable = allowUpload && can(user, "document:ocr") && isOcrAvailable();
   const yearValue = period ? String(period.year) : ALL;
   const topValue = unit ? String(unit.number) : ALL;
   const statusValue = status ? STATUS_PARAM[status] : ALL;
@@ -116,7 +123,16 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
           <span className="text-subtle">–</span>
         ),
     },
-    { key: "status", header: "Status", cell: (p) => <StatusBadge status={p.status} /> },
+    {
+      key: "status",
+      header: "Status",
+      cell: (p) => (
+        <span className="inline-flex flex-wrap justify-end gap-1 md:justify-start">
+          <StatusBadge status={p.status} />
+          <ReviewFlag status={p.reviewStatus} />
+        </span>
+      ),
+    },
     { key: "documents", header: "Nachweis", cell: (p) => <DocumentChips documents={p.documents} /> },
     {
       key: "amount",
@@ -168,6 +184,12 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
           ]}
           hrefPattern={href({ status: "{value}" })}
         />
+        {!canWrite && can(user, "payment:submit") ? (
+          <ButtonLink href="/eingaben" variant="secondary">
+            <Send aria-hidden />
+            Einzahlung einreichen
+          </ButtonLink>
+        ) : null}
         {canWrite ? (
           <FormDialog
             trigger={
@@ -189,6 +211,7 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
                 date: todayIso(),
               }}
               allowUpload={allowUpload}
+              ocrAvailable={ocrAvailable}
             />
           </FormDialog>
         ) : null}
@@ -275,6 +298,7 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
                               units={units}
                               payment={payment}
                               allowUpload={allowUpload}
+              ocrAvailable={ocrAvailable}
                             />
                           </FormDialog>
                         ) : null}

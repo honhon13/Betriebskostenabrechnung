@@ -2,14 +2,16 @@
 
 Private Betriebskostenabrechnung für drei Wohneinheiten (TOP 1–3): Kosten erfassen, nach
 Umlageschlüsseln verteilen, Einzahlungen verbuchen, Dokumente ablegen und die Abrechnung je
-TOP freigeben.
+TOP freigeben. Die TOPs reichen eigene Einträge ein, die Verwaltung prüft sie.
 
 | Bereich | Inhalt |
 | --- | --- |
-| **Dashboard** | Abrechnungsperiode, Gesamtkosten, Kosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
+| **Dashboard** | Abrechnungsperiode, Gesamtkosten, Kostenverlauf (Diagramm je Monat oder Jahr), Kosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
 | **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen, Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente |
 | **Einzahlungen** | Je TOP mit Datum, Betrag, Jahr, Beschreibung, Zahlungsstatus und Nachweis; Guthaben/Nachzahlung je TOP |
 | **Dokumente** | Rechnungen, Zahlungsnachweise, Verträge, Sonstiges – mit Suche, Filtern, Sortierung, Vorschau und Download |
+| **Meine Eingaben** (USER) | Kosten, Einzahlungen, Dokumente und Abrechnungsjahre einreichen; Prüfstand und Kommentar der Verwaltung sehen |
+| **Prüfung** (ADMIN) | Eingereichte Einträge ansehen, freigeben, ablehnen, bearbeiten oder löschen |
 | **Einstellungen** | Konto, Stammdaten (TOPs, Kostenarten, Umlageschlüssel), Benutzer und Rollen |
 
 Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · Drizzle ORM · Neon PostgreSQL ·
@@ -34,8 +36,8 @@ geändert werden. Der Seed ist idempotent und überschreibt keine bestehenden Pa
 
 | Benutzer | Rolle | Darf |
 | --- | --- | --- |
-| `top2` | ADMIN | Alles: Kosten, Einzahlungen, Dokumente, Freigabe, Löschen, Stammdaten, Benutzer |
-| `top1`, `top3` | USER | Nur lesen – und nur **freigegebene** Daten der **eigenen** TOP |
+| `top2` | ADMIN | Alles: Kosten, Einzahlungen, Dokumente, Prüfung, Freigabe, Löschen, Stammdaten, Benutzer |
+| `top1`, `top3` | USER | **Freigegebene** Daten der **eigenen** TOP lesen; eigene Einträge einreichen und ändern – nichts löschen |
 
 Eine Abrechnung ist zunächst ein **Entwurf** und nur für die Verwaltung sichtbar. Mit
 „Freigeben" sehen die TOPs ihren Kostenanteil, ihre Einzahlungen und die Dokumente, die sie
@@ -51,6 +53,49 @@ anpassen oder neu anlegen. Zwei Rechte steuern den Datenumfang:
 
 - `scope:all_units` – Daten aller TOPs statt nur der eigenen
 - `scope:drafts` – auch nicht freigegebene Abrechnungsjahre
+
+### Einreichen und Prüfen
+
+USER erfassen unter **Meine Eingaben** Kostenpositionen, Einzahlungen, Dokumente und neue
+Abrechnungsjahre. Jeder dieser Einträge erhält den Prüfstand **Ausstehende Prüfung** und zählt
+erst nach der Freigabe durch die Verwaltung:
+
+| Prüfstand | Bedeutung |
+| --- | --- |
+| Ausstehende Prüfung | Eingereicht oder nach der Freigabe geändert – zählt nicht |
+| Freigegeben | Von der Verwaltung bestätigt – zählt in Abrechnung, Salden und Auswertungen |
+| Abgelehnt | Zählt nicht; der Kommentar der Verwaltung steht beim Eintrag |
+
+- **Offiziell zählt nur Freigegebenes.** Abrechnung, Salden, Monats- und Jahresübersicht,
+  Kostenverlauf und Dashboard-Kennzahlen rechnen ausschließlich mit freigegebenen Einträgen.
+  Wer eingereicht hat, sieht den eigenen Eintrag samt Prüfstand; andere TOPs sehen ihn erst
+  nach der Freigabe (und wie bisher nur, wenn das Jahr freigegeben ist und er sie betrifft).
+- **Änderungen werden erneut geprüft.** Ändert ein USER einen bereits freigegebenen eigenen
+  Eintrag, fällt er auf „Ausstehende Prüfung" zurück und zählt bis zur erneuten Freigabe nicht.
+- **Prüfung** (nur ADMIN): freigeben oder ablehnen, jeweils mit optionalem Kommentar. Mit einer
+  Kostenposition oder Einzahlung werden ihre noch ungeprüften Belege mit freigegeben. Einträge
+  der Verwaltung entstehen direkt freigegeben; bearbeitet die Verwaltung einen eingereichten
+  Eintrag, ändert das den Prüfstand nicht.
+- **Kosten** reichen USER ohne Umlageschlüssel und TOP-Zuordnung ein. Vorbelegt wird der
+  Standardschlüssel der Kostenart über alle TOPs; die Verwaltung passt beides bei der Prüfung
+  an. Eingereicht wird in Jahre im Entwurf – eine Kostenposition lässt sich nicht in eine
+  bereits veröffentlichte Abrechnung freigeben.
+- **Einzahlungen und Dokumente** gelten immer für die eigene TOP; verknüpfen lassen sich
+  Dokumente nur mit eigenen Einträgen.
+- **Löschen** darf ausschließlich die Verwaltung – das gilt für Abrechnungsjahre ebenso wie
+  für Kosten, Einzahlungen und Dokumente.
+
+Die Rechte dazu: `period:submit`, `cost:submit`, `payment:submit`, `document:submit`
+(einreichen) und `review:manage` (prüfen). Prüfstand, Prüfdatum, Prüfer und Kommentar stehen
+in den Spalten `review_status`, `reviewed_at`, `reviewed_by` und `review_comment`.
+
+### Kostenverlauf
+
+Das Diagramm im Dashboard zeigt die Kosten (€, Y-Achse) über den Zeitraum (X-Achse) –
+wahlweise je Monat eines Abrechnungsjahres oder je Jahr im Vergleich aller Jahre. Es wird bei
+jedem Aufruf aus den gespeicherten, freigegebenen Kosten berechnet. Die Verwaltung sieht die
+Gesamtkosten gestapelt nach TOP (noch nicht verteilte Beträge eigens ausgewiesen), USER ihren
+eigenen Anteil in freigegebenen Jahren. Unter „Werte als Tabelle" stehen dieselben Zahlen.
 
 ## Architektur
 
@@ -98,11 +143,14 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | --- | --- |
 | `users`, `roles`, `role_permissions`, `sessions` | Benutzer, Rollen, Rechte, Sitzungen |
 | `units` | TOPs mit Wohnfläche und Personen |
-| `billing_periods` | Abrechnungsjahre mit Status Entwurf/Freigegeben |
+| `billing_periods` | Abrechnungsjahre mit Status Entwurf/Freigegeben und Prüfstand |
 | `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
 | `costs`, `cost_units` | Kostenpositionen und ihre TOP-Zuordnung |
 | `payments` | Einzahlungen je TOP mit Zahlungsstatus |
 | `documents`, `document_files`, `document_links` | Dokumente (Metadaten), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
+
+`billing_periods`, `costs`, `payments` und `documents` tragen jeweils Prüfstand, Prüfdatum,
+Prüfer und Kommentar.
 
 ### Erweitern
 
@@ -167,9 +215,13 @@ Formate, die Azure nicht annimmt (WebP), ungültige Zugangsdaten, ein erschöpft
 und Zeitüberschreitungen. Der kostenlose Azure-Tarif (F0) liest nur die ersten zwei Seiten
 und Dateien bis 4 MB.
 
-Automatisch ausgelesen wird nur beim Upload in der Dokumentenverwaltung. Belege, die über das
-Kosten- oder Einzahlungsformular angehängt werden, bleiben „Offen" und lassen sich bei Bedarf
-per Schaltfläche auslesen.
+Belege, die die Verwaltung über das Kosten- oder Einzahlungsformular anhängt, werden ebenfalls
+automatisch ausgelesen. Erkannte Werte ergänzen die leeren Felder des Dokuments – bei einer
+Rechnung zusätzlich Rechnungsdatum, Rechnungssteller und Rechnungsnummer der Kostenposition,
+soweit sie im Formular leer geblieben sind. Betrag und Zuordnung bleiben, wie eingegeben.
+
+Von USER eingereichte Dokumente und Belege werden nicht automatisch ausgelesen (OCR setzt das
+Recht `document:ocr` voraus); die Verwaltung kann sie per Schaltfläche auslesen.
 
 ## Deployment auf Vercel
 
@@ -192,7 +244,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte |
+| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |

@@ -23,6 +23,8 @@ interface DocumentUploadProps extends DocumentFormOptions {
   lockPeriod?: boolean;
   /** OCR ist eingerichtet und der Benutzer darf sie nutzen. */
   ocrAvailable: boolean;
+  /** Einreichen durch Benutzer: andere Beschriftung, kein TOP-Feld, Hinweis auf die Prüfung. */
+  submission?: boolean;
 }
 
 /** Antwort von POST /api/dokumente. */
@@ -46,17 +48,25 @@ export function DocumentUploadDialog(props: DocumentUploadProps) {
 
   return (
     <>
-      <Button onClick={() => setOpen(true)}>
+      <Button onClick={() => setOpen(true)} variant={props.submission ? "secondary" : "primary"}>
         <Upload aria-hidden />
-        Dokument hochladen
+        {props.submission ? "Dokument einreichen" : "Dokument hochladen"}
       </Button>
       {open ? (
         <Dialog
-          title={review ? "Erkannte Daten prüfen" : "Dokument hochladen"}
+          title={
+            review
+              ? "Erkannte Daten prüfen"
+              : props.submission
+                ? "Dokument einreichen"
+                : "Dokument hochladen"
+          }
           description={
             review
               ? review.document.fileName
-              : "Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen."
+              : props.submission
+                ? "Das Dokument zählt erst nach der Freigabe durch die Verwaltung."
+                : "Rechnungen, Zahlungsnachweise, Verträge und sonstige Unterlagen."
           }
           onClose={close}
         >
@@ -128,7 +138,12 @@ function DocumentUpload({
           return;
         }
         setFormKey((key) => key + 1);
-        setStatus({ tone: "success", message: `„${selected.name}“ wurde hochgeladen.` });
+        setStatus({
+          tone: "success",
+          message: fields.submission
+            ? `„${selected.name}“ wurde eingereicht und wartet auf Prüfung.`
+            : `„${selected.name}“ wurde hochgeladen.`,
+        });
       } catch {
         setStatus({ tone: "danger", message: "Keine Verbindung zum Server. Bitte erneut versuchen." });
       }

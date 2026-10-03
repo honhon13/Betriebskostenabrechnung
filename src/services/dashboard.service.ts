@@ -91,11 +91,18 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
       shareCents: 0,
     };
     entry.totalCents += line.amountCents;
-    entry.shareCents += line.shares.reduce((acc, share) => acc + share.cents, 0);
+    // Für die Verwaltung zählt der volle Betrag – auch solange Schlüsselwerte fehlen und die
+    // Position noch nicht verteilt ist. Sonst stünde die Kostenart neben den Gesamtkosten mit € 0.
+    entry.shareCents += allUnits
+      ? line.amountCents
+      : line.shares.reduce((acc, share) => acc + share.cents, 0);
     categories.set(line.categoryId, entry);
   }
 
-  const pending = payments.filter((payment) => payment.status === "pending");
+  // Offiziell zählt nur Geprüftes; eigene, noch ungeprüfte Einträge stehen unter „Meine Eingaben“.
+  const official = payments.filter((payment) => payment.reviewStatus === "approved");
+  const officialDocuments = documents.filter((d) => d.reviewStatus === "approved");
+  const pending = official.filter((payment) => payment.status === "pending");
   const totals = summarizeStatement(statement, allUnits);
 
   const activities: Activity[] = [
@@ -107,7 +114,7 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
       amountCents: allUnits ? line.amountCents : (line.shares[0]?.cents ?? 0),
       at: line.createdAt,
     })),
-    ...payments.map((payment) => ({
+    ...official.map((payment) => ({
       kind: "payment" as const,
       id: payment.id,
       title: allUnits ? `Einzahlung ${payment.unitName}` : "Einzahlung",
@@ -115,7 +122,7 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
       amountCents: payment.amountCents,
       at: payment.createdAt,
     })),
-    ...documents.map((document) => ({
+    ...officialDocuments.map((document) => ({
       kind: "document" as const,
       id: document.id,
       title: document.fileName,
@@ -135,7 +142,7 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
     balances: statement.balances,
     categories: [...categories.values()].sort((a, b) => b.shareCents - a.shareCents),
     costCount: statement.lines.length,
-    documentCount: documents.length,
+    documentCount: officialDocuments.length,
     openItems: {
       unitsWithBalanceDue: statement.balances.filter((balance) => balance.balanceCents < 0),
       pendingPayments: {
@@ -146,13 +153,13 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
         ? statement.lines.filter((line) => line.documents.length === 0).length
         : 0,
       unassignedDocuments: allUnits
-        ? documents.filter(
+        ? officialDocuments.filter(
             (d) => d.costs.length === 0 && d.payments.length === 0 && d.unitId === null,
           ).length
         : 0,
       undistributedCents: statement.undistributedCents,
     },
     activities,
-    recentDocuments: documents.slice(0, 5),
+    recentDocuments: officialDocuments.slice(0, 5),
   };
 }

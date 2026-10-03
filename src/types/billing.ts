@@ -3,6 +3,15 @@ export type AllocationSource = "unit_area" | "unit_persons" | "equal" | "manual"
 export type OcrStatus = "none" | "pending" | "done" | "failed";
 export type DocumentType = "invoice" | "payment_proof" | "contract" | "other";
 export type PaymentStatus = "received" | "pending" | "cancelled";
+/** pending = ausstehende Prüfung, approved = freigegeben, rejected = abgelehnt. */
+export type ReviewStatus = "pending" | "approved" | "rejected";
+
+/** Prüfstand eines Eintrags. Nur „approved“ zählt offiziell. */
+export interface ReviewInfo {
+  reviewStatus: ReviewStatus;
+  reviewedAt: string | null;
+  reviewComment: string | null;
+}
 
 /** Kurzform eines Dokuments für Listen von Kosten und Einzahlungen. */
 export interface DocumentRef {
@@ -21,7 +30,7 @@ export interface UnitDto {
   notes: string | null;
 }
 
-export interface PeriodDto {
+export interface PeriodDto extends ReviewInfo {
   id: number;
   year: number;
   startDate: string;
@@ -59,7 +68,7 @@ export interface CategoryDto {
   sortOrder: number;
 }
 
-export interface CostDto {
+export interface CostDto extends ReviewInfo {
   id: number;
   periodId: number;
   categoryId: number;
@@ -77,7 +86,7 @@ export interface CostDto {
   createdAt: string;
 }
 
-export interface PaymentDto {
+export interface PaymentDto extends ReviewInfo {
   id: number;
   periodId: number;
   year: number;
@@ -132,7 +141,7 @@ export interface DocumentLinkRef {
   label: string;
 }
 
-export interface DocumentDto {
+export interface DocumentDto extends ReviewInfo {
   id: number;
   periodId: number;
   year: number;

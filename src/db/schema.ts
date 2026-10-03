@@ -29,6 +29,29 @@ const updatedAt = timestamp("updated_at", { withTimezone: true })
   .$onUpdate(() => new Date());
 
 // ---------------------------------------------------------------------------
+// Prüfung von Benutzer-Eingaben
+// ---------------------------------------------------------------------------
+
+/**
+ * pending = ausstehende Prüfung, approved = freigegeben, rejected = abgelehnt.
+ * Nur „approved“ zählt offiziell (Abrechnung, Salden, Sichtbarkeit für andere).
+ */
+export const reviewStatus = pgEnum("review_status", ["pending", "approved", "rejected"]);
+
+/**
+ * Prüfstatus, Prüfdatum, Prüfer und Kommentar – auf jeder Tabelle, in die Benutzer
+ * Einträge einreichen können. Einträge der Verwaltung entstehen direkt als „approved“.
+ * (reviewed_by verweist auf users.id; ohne Fremdschlüssel, weil users weiter unten steht
+ * und ein gelöschter Prüfer die Historie nicht verändern soll.)
+ */
+const reviewColumns = () => ({
+  reviewStatus: reviewStatus("review_status").notNull().default("approved"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  reviewedBy: integer("reviewed_by"),
+  reviewComment: text("review_comment"),
+});
+
+// ---------------------------------------------------------------------------
 // Rollen & Rechte
 // ---------------------------------------------------------------------------
 
@@ -122,6 +145,8 @@ export const billingPeriods = pgTable("billing_periods", {
   releasedAt: timestamp("released_at", { withTimezone: true }),
   releasedBy: integer("released_by").references(() => users.id, { onDelete: "set null" }),
   notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  ...reviewColumns(),
   createdAt,
   updatedAt,
 });
@@ -204,6 +229,7 @@ export const costs = pgTable(
       .references(() => allocationKeys.id, { onDelete: "restrict" }),
     notes: text("notes"),
     createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...reviewColumns(),
     createdAt,
     updatedAt,
   },
@@ -251,6 +277,7 @@ export const payments = pgTable(
     note: text("note"),
     status: paymentStatus("status").notNull().default("received"),
     createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    ...reviewColumns(),
     createdAt,
     updatedAt,
   },
@@ -303,6 +330,7 @@ export const documents = pgTable(
     ocrError: text("ocr_error"),
     ocrProcessedAt: timestamp("ocr_processed_at", { withTimezone: true }),
     uploadedBy: integer("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+    ...reviewColumns(),
     /** Upload-Datum. */
     createdAt,
     updatedAt,

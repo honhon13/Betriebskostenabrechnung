@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requireActor } from "@/auth/current-user";
-import { authorizeGlobalWrite } from "@/auth/rbac";
+import { authorizeGlobalWrite, can } from "@/auth/rbac";
 import { runAction } from "@/lib/action";
 import type { ActionState } from "@/lib/action-state";
 import { DomainError } from "@/lib/errors";
@@ -21,8 +21,14 @@ import {
   resetAllocationValuesFromUnits,
   saveAllocationValues,
 } from "@/services/allocation.service";
-import { createCost, deleteCost, updateCost } from "@/services/costs.service";
-import { checkUpload, uploadDocument, type UploadedFile } from "@/services/documents.service";
+import { createCost, deleteCost, fillCostFromOcr, updateCost } from "@/services/costs.service";
+import {
+  checkUpload,
+  isOcrAvailable,
+  processDocumentOcr,
+  uploadDocument,
+  type UploadedFile,
+} from "@/services/documents.service";
 import { createPeriod, deletePeriod, setPeriodStatus } from "@/services/periods.service";
 import type { SessionUser } from "@/types/auth";
 
@@ -58,15 +64,21 @@ export async function deletePeriodAction(periodId: number): Promise<ActionState>
   });
 }
 
-/** Hängt den im Kostenformular mitgeschickten Beleg als Rechnung an die Kostenposition. */
+/**
+ * Hängt den im Kostenformular mitgeschickten Beleg als Rechnung an die Kostenposition und
+ * liest ihn – wie beim Dokument-Upload – automatisch per OCR aus. Erkannte Werte ergänzen
+ * leere Felder des Dokuments und der Kostenposition; ein OCR-Fehler steht am Dokument und
+ * lässt das Speichern nicht scheitern.
+ */
 async function attachInvoice(
   actor: SessionUser,
   costId: number,
   input: CostInput,
   file: UploadedFile,
 ): Promise<void> {
+  let documentId: number;
   try {
-    await uploadDocument(actor, input.periodId, file, {
+    documentId = await uploadDocument(actor, input.periodId, file, {
       type: "invoice",
       description: null,
       unitId: null,
@@ -87,6 +99,11 @@ async function attachInvoice(
     throw new DomainError(
       `Die Kostenposition ist gespeichert, der Beleg konnte aber nicht abgelegt werden.${reason}`,
     );
+  }
+
+  if (isOcrAvailable() && can(actor, "document:ocr")) {
+    const ocr = await processDocumentOcr(actor, documentId);
+    if (ocr.fields) await fillCostFromOcr(actor, costId, ocr.fields);
   }
 }
 

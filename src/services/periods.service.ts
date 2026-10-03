@@ -2,7 +2,7 @@ import "server-only";
 
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 
-import { authorize, authorizeGlobalWrite, getDataScope } from "@/auth/rbac";
+import { authorize, authorizeGlobalWrite, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { seedAllocationValues } from "@/db/allocation-defaults";
 import { getDb } from "@/db/client";
 import { billingPeriods, costs, documents, payments } from "@/db/schema";
@@ -22,12 +22,29 @@ function toDto(row: PeriodRow): PeriodDto {
     status: row.status,
     releasedAt: row.releasedAt?.toISOString() ?? null,
     notes: row.notes,
+    reviewStatus: row.reviewStatus,
+    reviewedAt: row.reviewedAt?.toISOString() ?? null,
+    reviewComment: row.reviewComment,
   };
 }
+
+/** Abrechnungsjahr-Zeile → DTO, für Services, die Jahre selbst abfragen. */
+export const toPeriodDto = toDto;
 
 /** Ohne scope:drafts sind nur freigegebene Abrechnungsjahre sichtbar. */
 function visibleStatuses(actor: SessionUser): PeriodStatus[] {
   return getDataScope(actor).includeDrafts ? ["draft", "released"] : ["released"];
+}
+
+/**
+ * Sichtbarkeit eines Abrechnungsjahres: Veröffentlichungsstand (Entwurf/Freigegeben) und
+ * Prüfstand. Von Benutzern eingereichte Jahre sieht bis zur Freigabe nur, wer prüfen darf.
+ */
+function visibleCondition(actor: SessionUser) {
+  return and(
+    inArray(billingPeriods.status, visibleStatuses(actor)),
+    seesUnreviewed(actor) ? undefined : eq(billingPeriods.reviewStatus, "approved"),
+  );
 }
 
 export async function listPeriods(actor: SessionUser): Promise<PeriodDto[]> {
@@ -35,7 +52,7 @@ export async function listPeriods(actor: SessionUser): Promise<PeriodDto[]> {
   const rows = await getDb()
     .select()
     .from(billingPeriods)
-    .where(inArray(billingPeriods.status, visibleStatuses(actor)))
+    .where(visibleCondition(actor))
     .orderBy(desc(billingPeriods.year));
   return rows.map(toDto);
 }
@@ -45,9 +62,7 @@ export async function getPeriodByYear(actor: SessionUser, year: number): Promise
   const [row] = await getDb()
     .select()
     .from(billingPeriods)
-    .where(
-      and(eq(billingPeriods.year, year), inArray(billingPeriods.status, visibleStatuses(actor))),
-    )
+    .where(and(eq(billingPeriods.year, year), visibleCondition(actor)))
     .limit(1);
   return row ? toDto(row) : null;
 }
@@ -61,9 +76,7 @@ export async function getVisiblePeriod(actor: SessionUser, periodId: number): Pr
   const [row] = await getDb()
     .select()
     .from(billingPeriods)
-    .where(
-      and(eq(billingPeriods.id, periodId), inArray(billingPeriods.status, visibleStatuses(actor))),
-    )
+    .where(and(eq(billingPeriods.id, periodId), visibleCondition(actor)))
     .limit(1);
   if (!row) throw new NotFoundError("Das Abrechnungsjahr wurde nicht gefunden.");
   return toDto(row);
@@ -116,7 +129,12 @@ export async function setPeriodStatus(
   status: PeriodStatus,
 ): Promise<PeriodDto> {
   authorizeGlobalWrite(actor, "period:release");
-  await getVisiblePeriod(actor, periodId);
+  const period = await getVisiblePeriod(actor, periodId);
+  if (status === "released" && period.reviewStatus !== "approved") {
+    throw new DomainError(
+      `Das Abrechnungsjahr ${period.year} wurde eingereicht und ist noch nicht geprüft. Bitte zuerst prüfen.`,
+    );
+  }
 
   const [row] = await getDb()
     .update(billingPeriods)
@@ -150,4 +168,27 @@ export async function deletePeriod(actor: SessionUser, periodId: number): Promis
   }
 
   await db.delete(billingPeriods).where(eq(billingPeriods.id, periodId));
+}
+
+/**
+ * Abrechnungsjahre, in die der Benutzer Einträge einreichen darf: alle geprüften Jahre –
+ * auch nicht veröffentlichte, denn eingereicht wird meist ins laufende Jahr – sowie eigene,
+ * noch ungeprüfte Vorschläge. Das gibt keinen Einblick in die Abrechnung eines Entwurfs,
+ * nur die Möglichkeit, ihn als Ziel zu wählen.
+ */
+export async function listSubmittablePeriods(actor: SessionUser): Promise<PeriodDto[]> {
+  const rows = await getDb().select().from(billingPeriods).orderBy(desc(billingPeriods.year));
+  return rows
+    .filter(
+      (row) =>
+        row.reviewStatus === "approved" ||
+        (row.reviewStatus === "pending" && row.createdBy === actor.id),
+    )
+    .map(toDto);
+}
+
+export async function getSubmittablePeriod(actor: SessionUser, periodId: number): Promise<PeriodDto> {
+  const period = (await listSubmittablePeriods(actor)).find((p) => p.id === periodId);
+  if (!period) throw new NotFoundError("Das Abrechnungsjahr wurde nicht gefunden.");
+  return period;
 }

@@ -32,6 +32,7 @@ test.describe("Mobil", () => {
       `/abrechnung/${CURRENT_YEAR}/belege`,
       "/einzahlungen",
       "/dokumente",
+      "/pruefung",
       "/einstellungen",
       "/einstellungen/stammdaten",
       "/einstellungen/benutzer",

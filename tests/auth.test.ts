@@ -21,11 +21,12 @@ describe("Rollen", () => {
     expect(new Set(admin.permissions)).toEqual(new Set(ALL_PERMISSIONS));
   });
 
-  it("USER darf nur lesen", () => {
+  it("USER darf lesen und einreichen – nicht direkt schreiben, löschen, prüfen oder alle TOPs sehen", () => {
     const forbidden = user.permissions.filter(
       (p) => /:(write|delete|release|manage|ocr)$/.test(p) || p.startsWith("scope:"),
     );
     expect(forbidden).toEqual([]);
+    expect(user.permissions.filter((p) => p.endsWith(":submit"))).toHaveLength(4);
   });
 });
 

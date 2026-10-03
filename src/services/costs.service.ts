@@ -16,7 +16,7 @@ import {
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { CostInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
-import type { CostDto } from "@/types/billing";
+import type { CostDto, OcrFields } from "@/types/billing";
 
 import { getDocumentRefs } from "./documents.service";
 import { assertDraft, getVisiblePeriod } from "./periods.service";
@@ -67,6 +67,9 @@ export async function listCosts(actor: SessionUser, periodId: number): Promise<C
     unitIds: unitRows.filter((u) => u.costId === cost.id).map((u) => u.unitId),
     documents: documentRefs.get(cost.id) ?? [],
     createdAt: cost.createdAt.toISOString(),
+    reviewStatus: cost.reviewStatus,
+    reviewedAt: cost.reviewedAt?.toISOString() ?? null,
+    reviewComment: cost.reviewComment,
   }));
 }
 
@@ -180,4 +183,29 @@ export async function deleteCost(actor: SessionUser, costId: number): Promise<vo
   authorizeGlobalWrite(actor, "cost:delete");
   assertDraft(await getVisiblePeriod(actor, await getCostPeriod(costId)));
   await getDb().delete(costs).where(eq(costs.id, costId));
+}
+
+/**
+ * Ergänzt leere Rechnungsfelder einer Kostenposition (Datum, Lieferant, Rechnungsnummer)
+ * mit den Werten, die die OCR im angehängten Beleg erkannt hat. Eingetragenes bleibt stehen;
+ * Beschreibung und Betrag stammen immer aus dem Formular.
+ */
+export async function fillCostFromOcr(
+  actor: SessionUser,
+  costId: number,
+  fields: Pick<OcrFields, "documentDate" | "supplier" | "invoiceNumber">,
+): Promise<void> {
+  authorizeGlobalWrite(actor, "cost:write");
+  const db = getDb();
+  const [cost] = await db.select().from(costs).where(eq(costs.id, costId)).limit(1);
+  if (!cost) throw new NotFoundError("Die Kostenposition wurde nicht gefunden.");
+
+  const patch = {
+    ...(cost.costDate === null && fields.documentDate ? { costDate: fields.documentDate } : {}),
+    ...(cost.supplier === null && fields.supplier ? { supplier: fields.supplier } : {}),
+    ...(cost.invoiceNumber === null && fields.invoiceNumber
+      ? { invoiceNumber: fields.invoiceNumber }
+      : {}),
+  };
+  if (Object.keys(patch).length > 0) await db.update(costs).set(patch).where(eq(costs.id, costId));
 }

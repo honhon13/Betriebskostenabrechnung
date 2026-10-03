@@ -156,6 +156,21 @@ export const costSchema = z.object({
   notes: optionalText(1000),
 });
 
+/**
+ * Kosten, die ein Benutzer zur Prüfung einreicht. Umlageschlüssel und TOP-Zuordnung
+ * legt die Verwaltung bei der Prüfung fest – sie kommen hier bewusst nicht vor.
+ */
+export const costSubmissionSchema = z.object({
+  periodId: id,
+  categoryId: id,
+  description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
+  amount: amountCents,
+  costDate: optionalIsoDate,
+  supplier: optionalText(200),
+  invoiceNumber: optionalText(100),
+  notes: optionalText(1000),
+});
+
 export const allocationValuesSchema = z.object({
   values: z.array(z.object({ keyId: id, unitId: id, value: decimal })),
 });
@@ -172,6 +187,26 @@ export const paymentSchema = z.object({
   purpose: optionalText(200),
   note: optionalText(1000),
   status: z.enum(["received", "pending", "cancelled"]).default("received"),
+});
+
+/** Einzahlung, die ein Benutzer für die eigene TOP zur Prüfung einreicht. */
+export const paymentSubmissionSchema = z.object({
+  periodId: id,
+  paymentDate: isoDate,
+  amount: amountCents,
+  purpose: optionalText(200),
+  note: optionalText(1000),
+});
+
+// ---------------------------------------------------------------------------
+// Prüfung
+// ---------------------------------------------------------------------------
+
+export const reviewKindSchema = z.enum(["period", "cost", "payment", "document"]);
+
+export const reviewDecisionSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  comment: optionalText(500),
 });
 
 // ---------------------------------------------------------------------------
@@ -262,6 +297,8 @@ export const rolePermissionsSchema = z.object({
 
 export type CostInput = z.infer<typeof costSchema>;
 export type PaymentInput = z.infer<typeof paymentSchema>;
+export type CostSubmissionInput = z.infer<typeof costSubmissionSchema>;
+export type PaymentSubmissionInput = z.infer<typeof paymentSubmissionSchema>;
 export type DocumentMetaInput = z.infer<typeof documentMetaSchema>;
 export type PeriodInput = z.infer<typeof periodSchema>;
 export type UnitInput = z.infer<typeof unitSchema>;

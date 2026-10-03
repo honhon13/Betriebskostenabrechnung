@@ -13,6 +13,11 @@ const UNREADABLE = `e2e-ocr-unlesbar-${RUN}.pdf`;
 const WEBP = `e2e-ocr-foto-${RUN}.webp`;
 const PLAIN = `e2e-ocr-brief-${RUN}.pdf`;
 const MANUAL = `e2e-ocr-manuell-${RUN}.pdf`;
+const USER_FILE = `e2e-ocr-user-${RUN}.pdf`;
+const COST = `E2E Testkosten OCR ${RUN}`;
+const COST_FILE = `e2e-ocr-kostenbeleg-${RUN}.pdf`;
+const PURPOSE = `E2E Einzahlung OCR ${RUN}`;
+const PROOF_FILE = `e2e-ocr-nachweis-${RUN}.pdf`;
 
 const row = (page: Page, text: string) => page.getByRole("row").filter({ hasText: text });
 const pdf = (name: string, marker: string) => ({
@@ -195,19 +200,78 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await userPage.goto("/dokumente");
     await expect(userPage.getByText("OCR", { exact: true })).toHaveCount(0);
     await expect(userPage.getByRole("button", { name: /per OCR auslesen/ })).toHaveCount(0);
+    // Ein Upload wird zwar zur Prüfung angenommen, aber nicht ausgelesen.
     const upload = await userPage.request.post("/api/dokumente", {
-      multipart: { periodId: "1", ocr: "on", file: pdf("x.pdf", "OCR-RECHNUNG") },
+      multipart: { periodId: "1", ocr: "on", file: pdf(USER_FILE, "OCR-RECHNUNG") },
     });
-    expect(upload.status()).toBe(403);
+    expect(upload.status()).toBe(201);
+    expect((await upload.json()).ocr).toBeNull();
     await userPage.close();
   });
 
-  test("Testdokumente wieder löschen", async () => {
+  test("Kostenformular: angehängter Beleg wird ausgelesen und ergänzt leere Felder", async () => {
+    await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
+    await page.getByRole("button", { name: "Kosten erfassen" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("automatisch per OCR ausgelesen")).toBeVisible();
+    await dialog.getByLabel("Beschreibung").fill(COST);
+    await dialog.getByLabel("Betrag (€)").fill("214,80");
+    // Lieferant bleibt leer, die Rechnungsnummer ist von Hand eingetragen.
+    await dialog.getByLabel("Rechnungsnummer").fill("EIGENE-NR");
+    await dialog.locator('input[type="file"]').setInputFiles(pdf(COST_FILE, "OCR-RECHNUNG"));
+    await dialog.getByRole("button", { name: "Speichern" }).click();
+    await expect(dialog).toBeHidden({ timeout: 15_000 });
+
+    // Leere Felder der Kostenposition sind ergänzt, Eingetragenes bleibt.
+    const costRow = row(page, COST);
+    await expect(costRow).toContainText("Rauchfangkehrer Muster GmbH");
+    await expect(costRow).toContainText("15.03.2026");
+    await page.getByRole("button", { name: `${COST} bearbeiten` }).click();
+    await expect(page.getByRole("dialog").getByLabel("Rechnungsnummer")).toHaveValue("EIGENE-NR");
+    await page.getByRole("dialog").getByRole("button", { name: "Abbrechen" }).click();
+
+    // Das Dokument ist verarbeitet und hat die restlichen Rechnungsdaten bekommen.
     await page.goto(`/dokumente?q=${RUN}`);
-    for (const name of [INVOICE, OWN_VALUES, UNREADABLE, WEBP, PLAIN, MANUAL]) {
+    const documentRow = row(page, COST_FILE);
+    await expect(documentRow).toContainText("Verarbeitet");
+    await expect(documentRow).toContainText("netto € 179,00 · MwSt. € 35,80 · brutto € 214,80");
+    await expect(documentRow).toContainText("Leistung 01.01.2026 – 31.03.2026");
+  });
+
+  test("Einzahlungsformular: angehängter Nachweis wird ausgelesen", async () => {
+    await page.goto(`/einzahlungen?jahr=${CURRENT_YEAR}&top=3`);
+    await page.getByRole("button", { name: "Einzahlung erfassen" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("wird automatisch per OCR ausgelesen")).toBeVisible();
+    await dialog.getByLabel("Betrag (€)").fill("55,55");
+    await dialog.locator('select[name="unitId"]').selectOption({ label: "TOP 3" });
+    await dialog.getByLabel("Beschreibung / Verwendungszweck").fill(PURPOSE);
+    await dialog.locator('input[type="file"]').setInputFiles(pdf(PROOF_FILE, "nur ein Kontoauszug"));
+    await dialog.getByRole("button", { name: "Speichern" }).click();
+    await expect(dialog).toBeHidden({ timeout: 15_000 });
+    await expect(row(page, PURPOSE).getByRole("button", { name: PROOF_FILE })).toBeVisible();
+
+    await page.goto(`/dokumente?q=${RUN}`);
+    await expect(row(page, PROOF_FILE)).toContainText("Verarbeitet");
+    await expect(row(page, PROOF_FILE)).toContainText("Zahlungsnachweis");
+  });
+
+  test("Testdaten wieder löschen", async () => {
+    await page.goto(`/einzahlungen?jahr=${CURRENT_YEAR}&top=3`);
+    await row(page, PURPOSE).getByRole("button", { name: /löschen/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Löschen" }).click();
+    await expect(row(page, PURPOSE)).toHaveCount(0);
+
+    await page.goto(`/dokumente?q=${RUN}`);
+    for (const name of [INVOICE, OWN_VALUES, UNREADABLE, WEBP, PLAIN, MANUAL, USER_FILE, COST_FILE, PROOF_FILE]) {
       await page.getByRole("button", { name: `${name} löschen` }).click();
       await page.getByRole("dialog").getByRole("button", { name: "Löschen" }).click();
       await expect(row(page, name)).toHaveCount(0);
     }
+
+    await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
+    await page.getByRole("button", { name: `${COST} löschen` }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Löschen" }).click();
+    await expect(row(page, COST)).toHaveCount(0);
   });
 });

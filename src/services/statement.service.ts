@@ -1,8 +1,8 @@
 import "server-only";
 
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 
-import { authorize, getDataScope } from "@/auth/rbac";
+import { authorize, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb } from "@/db/client";
 import {
   allocationKeys,
@@ -49,7 +49,8 @@ export async function getStatement(actor: SessionUser, periodId: number): Promis
       .from(costs)
       .innerJoin(costCategories, eq(costCategories.id, costs.categoryId))
       .innerJoin(allocationKeys, eq(allocationKeys.id, costs.allocationKeyId))
-      .where(eq(costs.periodId, periodId))
+      // Nur geprüfte Einträge zählen offiziell – Eingereichtes und Abgelehntes bleibt außen vor.
+      .where(and(eq(costs.periodId, periodId), eq(costs.reviewStatus, "approved")))
       .orderBy(asc(costCategories.sortOrder), asc(costCategories.name), asc(costs.costDate), asc(costs.id)),
     db.select().from(allocationValues).where(eq(allocationValues.periodId, periodId)),
     db
@@ -59,7 +60,7 @@ export async function getStatement(actor: SessionUser, periodId: number): Promis
         status: payments.status,
       })
       .from(payments)
-      .where(eq(payments.periodId, periodId)),
+      .where(and(eq(payments.periodId, periodId), eq(payments.reviewStatus, "approved"))),
   ]);
 
   const costIds = costRows.map((row) => row.id);
@@ -67,7 +68,8 @@ export async function getStatement(actor: SessionUser, periodId: number): Promis
     costIds.length === 0
       ? []
       : db.select().from(costUnits).where(inArray(costUnits.costId, costIds)),
-    getDocumentRefs("cost", costIds),
+    // Wer nicht prüft, sieht an den Positionen nur freigegebene Dokumente.
+    getDocumentRefs("cost", costIds, { approvedOnly: !seesUnreviewed(actor) }),
   ]);
 
   const statement = buildStatement({

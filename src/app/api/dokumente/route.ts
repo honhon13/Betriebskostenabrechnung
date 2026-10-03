@@ -1,7 +1,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requireActor } from "@/auth/current-user";
-import { can } from "@/auth/rbac";
+import { can, getDataScope } from "@/auth/rbac";
 import { apiErrorResponse } from "@/lib/api";
 import { DomainError } from "@/lib/errors";
 import { MAX_UPLOAD_BYTES } from "@/lib/files";
@@ -15,6 +15,7 @@ import {
   processDocumentOcr,
   uploadDocument,
 } from "@/services/documents.service";
+import { submitDocument } from "@/services/submissions.service";
 import type { OcrOutcome } from "@/types/billing";
 
 // Die OCR-Auswertung wartet auf Azure – dafür reicht das Standard-Zeitlimit nicht immer.
@@ -40,12 +41,17 @@ export async function POST(request: Request): Promise<Response> {
     if (!file) throw new DomainError("Bitte eine Datei auswählen.");
 
     const meta = documentMetaSchema.parse(formToObject(formData, ["costIds"]));
-    const id = await uploadDocument(actor, parseId(formData.get("periodId")), file, meta);
+    const periodId = parseId(formData.get("periodId"));
+    // Die Verwaltung legt Dokumente direkt ab; alle anderen reichen sie zur Prüfung ein.
+    const direct = can(actor, "document:write") && getDataScope(actor).allUnits;
+    const id = direct
+      ? await uploadDocument(actor, periodId, file, meta)
+      : await submitDocument(actor, periodId, file, meta);
 
     // Das Original ist ab hier gespeichert. Scheitert die OCR, bleibt der Upload erfolgreich –
     // der Fehler steht am Dokument, und es lässt sich von Hand ergänzen oder erneut auslesen.
     let ocr: OcrOutcome | null = null;
-    if (formData.get("ocr") === "on" && isOcrAvailable() && can(actor, "document:ocr")) {
+    if (direct && formData.get("ocr") === "on" && isOcrAvailable() && can(actor, "document:ocr")) {
       ocr = await processDocumentOcr(actor, id);
     }
 

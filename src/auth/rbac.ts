@@ -45,3 +45,11 @@ export function authorizeGlobalWrite(actor: Actor, permission: Permission): void
   authorize(actor, permission);
   if (!can(actor, "scope:all_units")) throw new ForbiddenError();
 }
+
+/**
+ * Wer prüfen darf, sieht auch Einträge, die noch nicht freigegeben oder abgelehnt sind.
+ * Alle anderen sehen fremde Einträge erst nach der Freigabe.
+ */
+export function seesUnreviewed(actor: Actor): boolean {
+  return can(actor, "review:manage");
+}

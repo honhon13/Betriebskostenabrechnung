@@ -496,7 +496,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     await fresh.getByLabel("Neues Passwort wiederholen").fill("mein-eigenes-passwort-2");
     await fresh.getByRole("button", { name: "Passwort speichern" }).click();
     await expect(fresh).toHaveURL(/\/dashboard/);
-    await expect(fresh.getByText("Mein Kostenanteil")).toBeVisible();
+    await expect(fresh.getByText("Mein Kostenanteil").first()).toBeVisible();
 
     // Reset durch die Verwaltung: neues Passwort wird einmalig gezeigt, die Sitzung ist weg.
     await page.reload();

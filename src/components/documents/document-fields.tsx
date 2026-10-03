@@ -28,6 +28,8 @@ interface DocumentFieldsProps extends DocumentFormOptions {
   defaultPeriodId: number;
   /** true = Jahr ist vorgegeben (z. B. im Reiter eines Abrechnungsjahres). */
   lockPeriod?: boolean;
+  /** Einreichen durch Benutzer: das Dokument gehört immer zur eigenen TOP. */
+  submission?: boolean;
   document?: DocumentDto;
 }
 
@@ -39,6 +41,7 @@ export function DocumentFields({
   periods,
   defaultPeriodId,
   lockPeriod = false,
+  submission = false,
   costs,
   payments,
   units,
@@ -87,22 +90,24 @@ export function DocumentFields({
             </Select>
           </Field>
         )}
-        <Field
-          label="TOP"
-          name="unitId"
-          optional
-          hint="Nur ausfüllen, wenn das Dokument genau eine TOP betrifft."
-          className={lockPeriod ? undefined : "sm:col-span-2"}
-        >
-          <Select name="unitId" defaultValue={document?.unitId ?? ""}>
-            <option value="">Keine – gesamtes Gebäude</option>
-            {units.map((unit) => (
-              <option key={unit.id} value={unit.id}>
-                {unit.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        {submission ? null : (
+          <Field
+            label="TOP"
+            name="unitId"
+            optional
+            hint="Nur ausfüllen, wenn das Dokument genau eine TOP betrifft."
+            className={lockPeriod ? undefined : "sm:col-span-2"}
+          >
+            <Select name="unitId" defaultValue={document?.unitId ?? ""}>
+              <option value="">Keine – gesamtes Gebäude</option>
+              {units.map((unit) => (
+                <option key={unit.id} value={unit.id}>
+                  {unit.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
       </div>
 
       <Field label="Beschreibung" name="description" optional>
@@ -116,7 +121,9 @@ export function DocumentFields({
         </legend>
         {costOptions.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">
-            In diesem Abrechnungsjahr gibt es noch keine Kostenpositionen.
+            {submission
+              ? "Du hast in diesem Abrechnungsjahr noch keine Kostenposition eingereicht."
+              : "In diesem Abrechnungsjahr gibt es noch keine Kostenpositionen."}
           </p>
         ) : (
           // key: bei Jahreswechsel entstehen die Kästchen neu, alte Häkchen wandern nicht mit.
@@ -141,7 +148,9 @@ export function DocumentFields({
           </div>
         )}
         <p className="text-xs text-subtle">
-          Über die Verknüpfung sehen die beteiligten TOPs das Dokument, sobald das Jahr freigegeben ist.
+          {submission
+            ? "Zur Auswahl stehen deine eigenen, eingereichten Kostenpositionen."
+            : "Über die Verknüpfung sehen die beteiligten TOPs das Dokument, sobald das Jahr freigegeben ist."}
         </p>
       </fieldset>
 

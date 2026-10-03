@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 
 import { and, asc, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 
-import { authorize, authorizeGlobalWrite, getDataScope } from "@/auth/rbac";
+import { authorize, authorizeGlobalWrite, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb, type DbExecutor } from "@/db/client";
 import {
   billingPeriods,
@@ -71,19 +71,28 @@ function relevantToUnit(unitId: number): SQL {
 }
 
 /**
- * Ohne scope:all_units sind nur Dokumente sichtbar, die die eigene TOP betreffen.
+ * Welche Dokumente ein Benutzer sehen darf (Liste, Vorschau, Download – überall dieselbe Regel):
+ * – Wer prüft und alle TOPs sieht, sieht alles.
+ * – Alle anderen sehen ihre selbst hochgeladenen Dokumente immer, fremde nur, wenn sie
+ *   freigegeben sind, die eigene TOP betreffen und das Abrechnungsjahr veröffentlicht ist.
  * Nicht zugeordnete Dokumente sieht nur die Verwaltung.
+ * Die Bedingung setzt einen Join auf billing_periods voraus.
  */
-function scopeCondition(actor: SessionUser): SQL | undefined {
+function visibilityCondition(actor: SessionUser): SQL | undefined {
   const scope = getDataScope(actor);
-  if (scope.allUnits) return undefined;
-  if (scope.unitId === null) return sql`false`;
-  return relevantToUnit(scope.unitId);
-}
+  const published = scope.includeDrafts ? undefined : eq(billingPeriods.status, "released");
+  if (scope.allUnits && seesUnreviewed(actor)) return published;
 
-/** Ohne scope:drafts nur Dokumente freigegebener Abrechnungsjahre. */
-function periodCondition(actor: SessionUser): SQL | undefined {
-  return getDataScope(actor).includeDrafts ? undefined : eq(billingPeriods.status, "released");
+  const own = eq(documents.uploadedBy, actor.id);
+  if (!scope.allUnits && scope.unitId === null) return own;
+  return or(
+    own,
+    and(
+      eq(documents.reviewStatus, "approved"),
+      published,
+      scope.allUnits ? undefined : relevantToUnit(scope.unitId!),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +112,8 @@ export interface DocumentFilter {
   limit?: number;
   /** Genau ein Dokument – für getDocument. */
   documentId?: number;
+  /** Nur selbst hochgeladene Dokumente. */
+  ownOnly?: boolean;
 }
 
 /** Lädt die Verknüpfungen zu Dokumenten – für eingeschränkte Benutzer nur die eigenen. */
@@ -136,18 +147,33 @@ async function loadLinks(
     .where(inArray(documentLinks.documentId, documentIds))
     .orderBy(asc(documentLinks.id));
 
-  // Eine TOP soll an „ihrem“ Dokument keine fremden Kostenpositionen oder Zahlungen ablesen können.
+  // Eine TOP soll an „ihrem“ Dokument keine fremden Kostenpositionen oder Zahlungen ablesen
+  // können – sichtbar sind Positionen, an denen sie beteiligt ist oder die sie selbst eingereicht hat.
   let ownCostIds: Set<number> | null = null;
   if (!scope.allUnits) {
     const costIds = rows.flatMap((row) => (row.costId === null ? [] : [row.costId]));
-    const own =
+    const participating =
       costIds.length === 0 || scope.unitId === null
         ? []
         : await db
             .select({ costId: costUnits.costId })
             .from(costUnits)
-            .where(and(inArray(costUnits.costId, costIds), eq(costUnits.unitId, scope.unitId)));
-    ownCostIds = new Set(own.map((row) => row.costId));
+            .innerJoin(costs, eq(costs.id, costUnits.costId))
+            .where(
+              and(
+                inArray(costUnits.costId, costIds),
+                eq(costUnits.unitId, scope.unitId),
+                eq(costs.reviewStatus, "approved"),
+              ),
+            );
+    const submitted =
+      costIds.length === 0
+        ? []
+        : await db
+            .select({ costId: costs.id })
+            .from(costs)
+            .where(and(inArray(costs.id, costIds), eq(costs.createdBy, actor.id)));
+    ownCostIds = new Set([...participating, ...submitted].map((row) => row.costId));
   }
 
   for (const row of rows) {
@@ -210,6 +236,9 @@ function toDto(
     // Ältere Ergebnisse kennen die neueren Felder noch nicht – fehlende gelten als nicht erkannt.
     ocr: stored ? { ...EMPTY_OCR_FIELDS, ...stored.fields } : null,
     ocrError: row.ocrError,
+    reviewStatus: row.reviewStatus,
+    reviewedAt: row.reviewedAt?.toISOString() ?? null,
+    reviewComment: row.reviewComment,
     createdAt: row.createdAt.toISOString(),
     costs: links.costs,
     payments: links.payments,
@@ -262,8 +291,8 @@ export async function listDocuments(
     .leftJoin(units, eq(units.id, documents.unitId))
     .where(
       and(
-        periodCondition(actor),
-        scopeCondition(actor),
+        visibilityCondition(actor),
+        filter.ownOnly ? eq(documents.uploadedBy, actor.id) : undefined,
         filter.documentId ? eq(documents.id, filter.documentId) : undefined,
         filter.periodId ? eq(documents.periodId, filter.periodId) : undefined,
         filter.type ? eq(documents.type, filter.type) : undefined,
@@ -298,6 +327,7 @@ export async function getDocument(actor: SessionUser, documentId: number): Promi
 export async function getDocumentRefs(
   target: "cost" | "payment",
   ids: number[],
+  options: { approvedOnly?: boolean } = {},
 ): Promise<Map<number, DocumentRef[]>> {
   const result = new Map<number, DocumentRef[]>();
   if (ids.length === 0) return result;
@@ -313,7 +343,12 @@ export async function getDocumentRefs(
     })
     .from(documentLinks)
     .innerJoin(documents, eq(documents.id, documentLinks.documentId))
-    .where(inArray(column, ids))
+    .where(
+      and(
+        inArray(column, ids),
+        options.approvedOnly ? eq(documents.reviewStatus, "approved") : undefined,
+      ),
+    )
     .orderBy(asc(documents.id));
 
   for (const { targetId, ...ref } of rows) {
@@ -381,14 +416,13 @@ export async function listLinkOptions(
 /** Lädt ein Dokument im Sichtbereich des Benutzers – sonst „nicht gefunden“. */
 async function getAccessibleDocument(actor: SessionUser, documentId: number): Promise<DocumentRow> {
   const [row] = await getDb()
-    .select()
+    .select({ document: documents })
     .from(documents)
-    .where(and(eq(documents.id, documentId), scopeCondition(actor)))
+    .innerJoin(billingPeriods, eq(billingPeriods.id, documents.periodId))
+    .where(and(eq(documents.id, documentId), visibilityCondition(actor)))
     .limit(1);
   if (!row) throw new NotFoundError("Das Dokument wurde nicht gefunden.");
-  // Wirft ebenfalls „nicht gefunden“, wenn das Abrechnungsjahr nicht freigegeben ist.
-  await getVisiblePeriod(actor, row.periodId);
-  return row;
+  return row.document;
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import "server-only";
 import { authorize, getDataScope } from "@/auth/rbac";
 import { summarizeStatement, type StatementTotals } from "@/lib/billing/allocation";
 import { buildMonthlyOverview, type MonthlyOverview } from "@/lib/billing/monthly";
+import { buildMonthlyTrend, buildYearlyTrend, type CostTrend } from "@/lib/billing/trend";
 import type { SessionUser } from "@/types/auth";
 import type { PeriodDto } from "@/types/billing";
 
@@ -54,7 +55,12 @@ export async function getMonthlyOverview(
 
   const [statement, payments] = await Promise.all([
     getStatement(actor, period.id),
-    listPayments(actor, { periodId: period.id, unitId: focusUnitId, status: "received" }),
+    listPayments(actor, {
+      periodId: period.id,
+      unitId: focusUnitId,
+      status: "received",
+      reviewStatus: "approved",
+    }),
   ]);
 
   const costs = statement.lines.map((line) => ({
@@ -69,5 +75,22 @@ export async function getMonthlyOverview(
     period.year,
     costs,
     payments.map((payment) => ({ date: payment.paymentDate, cents: payment.amountCents })),
+  );
+}
+
+/**
+ * Kostenverlauf fürs Dashboard: mit einem Jahr die Monate dieses Abrechnungsjahres, ohne
+ * die Entwicklung über alle sichtbaren Jahre. Gerechnet wird aus der Abrechnung – es zählen
+ * also nur freigegebene Einträge, und ohne Blick auf alle TOPs nur der eigene Anteil.
+ */
+export async function getCostTrend(actor: SessionUser, period: PeriodDto | null): Promise<CostTrend> {
+  authorize(actor, "cost:read");
+  if (period) return buildMonthlyTrend(period.year, await getStatement(actor, period.id));
+
+  const periods = await listPeriods(actor);
+  return buildYearlyTrend(
+    await Promise.all(
+      periods.map(async (p) => ({ year: p.year, statement: await getStatement(actor, p.id) })),
+    ),
   );
 }

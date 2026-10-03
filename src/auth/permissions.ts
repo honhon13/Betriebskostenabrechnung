@@ -24,6 +24,13 @@ export const PERMISSIONS = {
   "document:delete": "Dokumente löschen",
   "document:ocr": "Dokumente per OCR auslesen",
 
+  // Einreichen: eigene Einträge erfassen, die erst nach Prüfung offiziell zählen.
+  "period:submit": "Abrechnungsjahre zur Prüfung einreichen",
+  "cost:submit": "Kosten zur Prüfung einreichen",
+  "payment:submit": "Einzahlungen zur Prüfung einreichen",
+  "document:submit": "Dokumente zur Prüfung einreichen",
+  "review:manage": "Eingereichte Einträge prüfen, freigeben und ablehnen",
+
   "masterdata:write": "Stammdaten pflegen (TOPs, Kostenarten, Umlageschlüssel)",
   "user:manage": "Benutzer und Rollen verwalten",
 
@@ -60,7 +67,18 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
   {
     key: ROLE_KEYS.USER,
     name: "Benutzer",
-    description: "Lesezugriff auf freigegebene Daten der eigenen TOP.",
-    permissions: ["dashboard:view", "period:read", "cost:read", "payment:read", "document:read"],
+    description:
+      "Liest freigegebene Daten der eigenen TOP und reicht eigene Einträge zur Prüfung ein.",
+    permissions: [
+      "dashboard:view",
+      "period:read",
+      "cost:read",
+      "payment:read",
+      "document:read",
+      "period:submit",
+      "cost:submit",
+      "payment:submit",
+      "document:submit",
+    ],
   },
 ];

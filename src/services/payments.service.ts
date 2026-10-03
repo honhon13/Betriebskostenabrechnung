@@ -1,15 +1,15 @@
 import "server-only";
 
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, or } from "drizzle-orm";
 
 import { ForbiddenError } from "@/auth/errors";
-import { authorize, canAccessUnit, getDataScope } from "@/auth/rbac";
+import { authorize, canAccessUnit, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb } from "@/db/client";
 import { billingPeriods, documentLinks, payments, units } from "@/db/schema";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { PaymentInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
-import type { PaymentDto, PaymentStatus } from "@/types/billing";
+import type { PaymentDto, PaymentStatus, ReviewStatus } from "@/types/billing";
 
 import { getDocumentRefs } from "./documents.service";
 import { getVisiblePeriod } from "./periods.service";
@@ -18,11 +18,14 @@ export interface PaymentFilter {
   periodId?: number;
   unitId?: number;
   status?: PaymentStatus;
+  /** Nur Einzahlungen mit diesem Prüfstand, z. B. „approved“ für alles, was offiziell zählt. */
+  reviewStatus?: ReviewStatus;
 }
 
 /**
  * Einzahlungen im Sichtbereich des Benutzers: ohne scope:all_units nur die eigene TOP,
- * ohne scope:drafts nur freigegebene Abrechnungsjahre.
+ * ohne scope:drafts nur freigegebene Abrechnungsjahre. Selbst eingereichte Einzahlungen
+ * sieht man immer – auch ungeprüft und in einem noch nicht veröffentlichten Jahr.
  */
 export async function listPayments(
   actor: SessionUser,
@@ -33,6 +36,7 @@ export async function listPayments(
   if (!scope.allUnits && scope.unitId === null) return [];
 
   const unitId = scope.allUnits ? filter.unitId : scope.unitId!;
+  const published = scope.includeDrafts ? undefined : inArray(billingPeriods.status, ["released"]);
 
   const rows = await getDb()
     .select({ payment: payments, year: billingPeriods.year, unitName: units.name })
@@ -44,7 +48,13 @@ export async function listPayments(
         filter.periodId ? eq(payments.periodId, filter.periodId) : undefined,
         unitId ? eq(payments.unitId, unitId) : undefined,
         filter.status ? eq(payments.status, filter.status) : undefined,
-        scope.includeDrafts ? undefined : inArray(billingPeriods.status, ["released"]),
+        filter.reviewStatus ? eq(payments.reviewStatus, filter.reviewStatus) : undefined,
+        seesUnreviewed(actor)
+          ? published
+          : or(
+              eq(payments.createdBy, actor.id),
+              and(eq(payments.reviewStatus, "approved"), published),
+            ),
       ),
     )
     .orderBy(desc(payments.paymentDate), desc(payments.id));
@@ -52,6 +62,7 @@ export async function listPayments(
   const documentRefs = await getDocumentRefs(
     "payment",
     rows.map((row) => row.payment.id),
+    { approvedOnly: !seesUnreviewed(actor) },
   );
 
   return rows.map(({ payment, year, unitName }) => ({
@@ -67,6 +78,9 @@ export async function listPayments(
     status: payment.status,
     documents: documentRefs.get(payment.id) ?? [],
     createdAt: payment.createdAt.toISOString(),
+    reviewStatus: payment.reviewStatus,
+    reviewedAt: payment.reviewedAt?.toISOString() ?? null,
+    reviewComment: payment.reviewComment,
   }));
 }
 
