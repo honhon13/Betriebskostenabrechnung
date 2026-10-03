@@ -27,6 +27,23 @@ export const metadata: Metadata = { title: "Kosten" };
 // Beim Speichern mit Beleg läuft die OCR mit – sie wartet auf Azure.
 export const maxDuration = 60;
 
+/** Leistungszeitraum, Netto und MwSt. einer Position – soweit angegeben. */
+function invoiceDetails(cost: CostDto): string {
+  const period =
+    cost.servicePeriodStart || cost.servicePeriodEnd
+      ? `Leistung ${[cost.servicePeriodStart, cost.servicePeriodEnd]
+          .map((date) => (date ? formatDate(date) : "…"))
+          .join(" – ")}`
+      : null;
+  return [
+    period,
+    cost.netAmountCents === null ? null : `netto ${formatCents(cost.netAmountCents)}`,
+    cost.taxAmountCents === null ? null : `MwSt. ${formatCents(cost.taxAmountCents)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export default async function CostsPage({
   params,
   searchParams,
@@ -71,6 +88,9 @@ export default async function CostsPage({
           <span className="block text-xs text-muted">
             {[cost.categoryName, cost.supplier].filter(Boolean).join(" · ")}
           </span>
+          {invoiceDetails(cost) ? (
+            <span className="block text-xs text-muted">{invoiceDetails(cost)}</span>
+          ) : null}
           {cost.reviewStatus !== "approved" ? (
             <span className="mt-1 block">
               <ReviewFlag status={cost.reviewStatus} />

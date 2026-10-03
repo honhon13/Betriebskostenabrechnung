@@ -224,6 +224,12 @@ export const costs = pgTable(
     costDate: date("cost_date", { mode: "string" }),
     supplier: text("supplier"),
     invoiceNumber: text("invoice_number"),
+    /** Leistungszeitraum laut Rechnung. */
+    servicePeriodStart: date("service_period_start", { mode: "string" }),
+    servicePeriodEnd: date("service_period_end", { mode: "string" }),
+    /** Netto und MwSt. laut Rechnung – `amountCents` ist der Bruttobetrag, der verteilt wird. */
+    netAmountCents: integer("net_amount_cents"),
+    taxAmountCents: integer("tax_amount_cents"),
     allocationKeyId: integer("allocation_key_id")
       .notNull()
       .references(() => allocationKeys.id, { onDelete: "restrict" }),

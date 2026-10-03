@@ -124,6 +124,16 @@ dialog.modal::backdrop {
   }
 }
 
+/* „Beleg fotografieren“ nur dort, wo eine Kamera zum Draufhalten da ist: Handy und Tablet. */
+.camera-only {
+  display: none;
+}
+@media (pointer: coarse), (max-width: 639px) {
+  .camera-only {
+    display: inline-flex;
+  }
+}
+
 /* Solange ein Dialog offen ist, scrollt die Seite dahinter nicht mit. */
 html:has(dialog[open]) {
   overflow: hidden;

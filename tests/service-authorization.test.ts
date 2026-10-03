@@ -39,6 +39,10 @@ const cost = {
   costDate: null,
   supplier: null,
   invoiceNumber: null,
+  servicePeriodStart: null,
+  servicePeriodEnd: null,
+  netAmount: null,
+  taxAmount: null,
   allocationKeyId: 1,
   unitIds: [1],
   notes: null,
@@ -95,7 +99,15 @@ const forbiddenForUser: Record<string, () => Promise<unknown>> = {
   runDocumentOcr: () => documents.runDocumentOcr(user, 1),
   processDocumentOcr: () => documents.processDocumentOcr(user, 1),
   fillCostFromOcr: () =>
-    costs.fillCostFromOcr(user, 1, { documentDate: null, supplier: null, invoiceNumber: null }),
+    costs.fillCostFromOcr(user, 1, {
+      documentDate: null,
+      supplier: null,
+      invoiceNumber: null,
+      servicePeriodStart: null,
+      servicePeriodEnd: null,
+      netAmountCents: null,
+      taxAmountCents: null,
+    }),
   // Prüfung
   listReviewItems: () => review.listReviewItems(user, "pending"),
   countPendingReviews: () => review.countPendingReviews(user),
@@ -139,6 +151,10 @@ const costSubmission = {
   costDate: null,
   supplier: null,
   invoiceNumber: null,
+  servicePeriodStart: null,
+  servicePeriodEnd: null,
+  netAmount: null,
+  taxAmount: null,
   notes: null,
 };
 const paymentSubmission = { periodId: 1, paymentDate: "2025-01-01", amount: 100, purpose: null, note: null };

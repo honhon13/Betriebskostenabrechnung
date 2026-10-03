@@ -61,6 +61,10 @@ export async function listCosts(actor: SessionUser, periodId: number): Promise<C
     costDate: cost.costDate,
     supplier: cost.supplier,
     invoiceNumber: cost.invoiceNumber,
+    servicePeriodStart: cost.servicePeriodStart,
+    servicePeriodEnd: cost.servicePeriodEnd,
+    netAmountCents: cost.netAmountCents,
+    taxAmountCents: cost.taxAmountCents,
     allocationKeyId: cost.allocationKeyId,
     allocationKeyName,
     notes: cost.notes,
@@ -106,6 +110,10 @@ function toColumns(input: CostInput) {
     costDate: input.costDate,
     supplier: input.supplier,
     invoiceNumber: input.invoiceNumber,
+    servicePeriodStart: input.servicePeriodStart,
+    servicePeriodEnd: input.servicePeriodEnd,
+    netAmountCents: input.netAmount,
+    taxAmountCents: input.taxAmount,
     allocationKeyId: input.allocationKeyId,
     notes: input.notes,
   };
@@ -186,14 +194,26 @@ export async function deleteCost(actor: SessionUser, costId: number): Promise<vo
 }
 
 /**
- * Ergänzt leere Rechnungsfelder einer Kostenposition (Datum, Lieferant, Rechnungsnummer)
- * mit den Werten, die die OCR im angehängten Beleg erkannt hat. Eingetragenes bleibt stehen;
- * Beschreibung und Betrag stammen immer aus dem Formular.
+ * Ergänzt leere Rechnungsfelder einer Kostenposition (Datum, Rechnungssteller, Rechnungsnummer,
+ * Leistungszeitraum, Netto, MwSt.) mit den Werten, die die OCR im angehängten Beleg erkannt hat.
+ * Eingetragenes bleibt stehen; Beschreibung und Betrag stammen immer aus dem Formular.
+ *
+ * Für Belege, die erst beim Speichern mitgeschickt werden. Liest das Formular den Beleg schon
+ * vorher aus (ReceiptCapture), stehen die erkannten Werte bereits in den Feldern.
  */
 export async function fillCostFromOcr(
   actor: SessionUser,
   costId: number,
-  fields: Pick<OcrFields, "documentDate" | "supplier" | "invoiceNumber">,
+  fields: Pick<
+    OcrFields,
+    | "documentDate"
+    | "supplier"
+    | "invoiceNumber"
+    | "servicePeriodStart"
+    | "servicePeriodEnd"
+    | "netAmountCents"
+    | "taxAmountCents"
+  >,
 ): Promise<void> {
   authorizeGlobalWrite(actor, "cost:write");
   const db = getDb();
@@ -205,6 +225,19 @@ export async function fillCostFromOcr(
     ...(cost.supplier === null && fields.supplier ? { supplier: fields.supplier } : {}),
     ...(cost.invoiceNumber === null && fields.invoiceNumber
       ? { invoiceNumber: fields.invoiceNumber }
+      : {}),
+    // Den Leistungszeitraum nur als Paar übernehmen – ein halb erkannter könnte dem Eingetragenen widersprechen.
+    ...(cost.servicePeriodStart === null && cost.servicePeriodEnd === null
+      ? {
+          ...(fields.servicePeriodStart ? { servicePeriodStart: fields.servicePeriodStart } : {}),
+          ...(fields.servicePeriodEnd ? { servicePeriodEnd: fields.servicePeriodEnd } : {}),
+        }
+      : {}),
+    ...(cost.netAmountCents === null && fields.netAmountCents !== null
+      ? { netAmountCents: fields.netAmountCents }
+      : {}),
+    ...(cost.taxAmountCents === null && fields.taxAmountCents !== null
+      ? { taxAmountCents: fields.taxAmountCents }
       : {}),
   };
   if (Object.keys(patch).length > 0) await db.update(costs).set(patch).where(eq(costs.id, costId));

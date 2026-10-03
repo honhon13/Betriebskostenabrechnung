@@ -9,6 +9,15 @@ test.describe("Anmeldung", () => {
     await expect(page.getByRole("heading", { name: "Anmelden" })).toBeVisible();
   });
 
+  test("Favicon ist eingebunden und ohne Anmeldung abrufbar", async ({ page }) => {
+    await page.goto("/login");
+    const href = await page.locator('link[rel="icon"]').first().getAttribute("href");
+    expect(href).toMatch(/^\/icon\.png/);
+    const icon = await page.request.get(href!);
+    expect(icon.status()).toBe(200);
+    expect(icon.headers()["content-type"]).toBe("image/png");
+  });
+
   test("API antwortet ohne Sitzung mit 401", async ({ request }) => {
     expect((await request.get("/api/dokumente/1/datei")).status()).toBe(401);
     expect((await request.post("/api/dokumente", { multipart: { periodId: "1" } })).status()).toBe(401);

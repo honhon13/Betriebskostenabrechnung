@@ -108,6 +108,10 @@ function costColumns(input: CostSubmissionInput) {
     costDate: input.costDate,
     supplier: input.supplier,
     invoiceNumber: input.invoiceNumber,
+    servicePeriodStart: input.servicePeriodStart,
+    servicePeriodEnd: input.servicePeriodEnd,
+    netAmountCents: input.netAmount,
+    taxAmountCents: input.taxAmount,
     notes: input.notes,
   };
 }
@@ -383,6 +387,10 @@ export interface OwnCostDto extends ReviewInfo {
   costDate: string | null;
   supplier: string | null;
   invoiceNumber: string | null;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  netAmountCents: number | null;
+  taxAmountCents: number | null;
   notes: string | null;
   documents: DocumentRef[];
   createdAt: string;
@@ -463,6 +471,10 @@ export async function listOwnSubmissions(actor: SessionUser): Promise<OwnSubmiss
     costDate: cost.costDate,
     supplier: cost.supplier,
     invoiceNumber: cost.invoiceNumber,
+    servicePeriodStart: cost.servicePeriodStart,
+    servicePeriodEnd: cost.servicePeriodEnd,
+    netAmountCents: cost.netAmountCents,
+    taxAmountCents: cost.taxAmountCents,
     notes: cost.notes,
     documents: costDocuments.get(cost.id) ?? [],
     createdAt: cost.createdAt.toISOString(),

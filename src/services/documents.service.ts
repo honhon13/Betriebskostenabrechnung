@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
-import { and, asc, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 
 import { authorize, authorizeGlobalWrite, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb, type DbExecutor } from "@/db/client";
@@ -574,6 +574,95 @@ export async function updateDocument(
       .set({ ...toColumns(meta), periodId })
       .where(eq(documents.id, documentId));
     await replaceLinks(tx, documentId, meta);
+  });
+}
+
+/** Im Kostenformular geprüfte Rechnungsdaten – Beträge in Cent. */
+export interface ReviewedInvoiceData {
+  documentDate: string | null;
+  supplier: string | null;
+  invoiceNumber: string | null;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  netAmountCents: number | null;
+  taxAmountCents: number | null;
+  amountCents: number | null;
+}
+
+/**
+ * Verknüpft bereits hochgeladene Belege mit einer Kostenposition. Gedacht für Belege, die im
+ * Kostenformular fotografiert bzw. ausgewählt und schon vor dem Speichern per OCR ausgelesen
+ * wurden: Original und OCR-Ergebnis liegen dann bereits am Dokument.
+ *
+ * - Ein Beleg ohne andere Verknüpfung wandert ins Abrechnungsjahr der Kostenposition, falls das
+ *   Jahr im Formular nach dem Upload geändert wurde.
+ * - `reviewed`: Bei genau einem Beleg gelten die im Formular geprüften Rechnungsdaten auch für
+ *   das Dokument – Kostenposition und Beleg widersprechen sich dann nicht. Was die OCR erkannt
+ *   hat, bleibt in `ocr_result` unverändert stehen.
+ */
+export async function attachReceiptsToCost(
+  actor: SessionUser,
+  costId: number,
+  documentIds: number[],
+  reviewed: ReviewedInvoiceData | null,
+): Promise<void> {
+  authorizeGlobalWrite(actor, "document:write");
+  const ids = [...new Set(documentIds)];
+  if (ids.length === 0) return;
+
+  const db = getDb();
+  const [cost] = await db
+    .select({ periodId: costs.periodId })
+    .from(costs)
+    .where(eq(costs.id, costId))
+    .limit(1);
+  if (!cost) throw new NotFoundError("Die Kostenposition wurde nicht gefunden.");
+  await getVisiblePeriod(actor, cost.periodId);
+
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: documents.id,
+        periodId: documents.periodId,
+        fileName: documents.fileName,
+        sha256: documents.sha256,
+      })
+      .from(documents)
+      .where(inArray(documents.id, ids));
+    if (rows.length !== ids.length) throw new NotFoundError("Ein Beleg wurde nicht gefunden.");
+
+    for (const document of rows.filter((row) => row.periodId !== cost.periodId)) {
+      const [{ links }] = await tx
+        .select({ links: count() })
+        .from(documentLinks)
+        .where(eq(documentLinks.documentId, document.id));
+      if (links > 0) {
+        throw new DomainError(`„${document.fileName}“ gehört zu einem anderen Abrechnungsjahr.`);
+      }
+      const [duplicate] = await tx
+        .select({ id: documents.id })
+        .from(documents)
+        .where(and(eq(documents.periodId, cost.periodId), eq(documents.sha256, document.sha256)))
+        .limit(1);
+      if (duplicate) {
+        throw new DomainError(
+          `„${document.fileName}“ ist in diesem Abrechnungsjahr bereits vorhanden.`,
+        );
+      }
+      await tx
+        .update(documents)
+        .set({ periodId: cost.periodId })
+        .where(eq(documents.id, document.id));
+    }
+
+    await tx
+      .insert(documentLinks)
+      .values(ids.map((documentId) => ({ documentId, costId, paymentId: null })))
+      .onConflictDoNothing();
+
+    if (reviewed && ids.length === 1) {
+      await tx.update(documents).set(reviewed).where(eq(documents.id, ids[0]));
+    }
   });
 }
 

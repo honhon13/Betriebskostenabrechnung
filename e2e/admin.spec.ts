@@ -154,7 +154,11 @@ test.describe.serial("ADMIN (TOP 2)", () => {
 
     await dialog.getByLabel("Betrag (€)").fill("300,00");
     await dialog.getByLabel("Umlageschlüssel").selectOption({ label: "Gleiche Teile" });
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(INVOICE));
+    // Der Beleg wird sofort gespeichert; solange das läuft, ist „Speichern“ gesperrt.
+    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(INVOICE));
+    await expect(dialog.getByRole("status").filter({ hasText: INVOICE })).toContainText("Ausgelesen");
+    // Auf dem Desktop gibt es keine Kamera-Schaltfläche.
+    await expect(dialog.getByRole("button", { name: "Beleg fotografieren" })).toBeHidden();
     await dialog.getByRole("button", { name: "Speichern" }).click();
     await expect(dialog).toBeHidden();
 
@@ -194,7 +198,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
   test("Dokument hochladen: Typ, Beschreibung, Kostenposition und TOP", async () => {
     await page.goto("/dokumente");
     const dialog = await openAdd(page, "Dokument hochladen");
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(FILE));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(FILE));
     await dialog.getByLabel("Dokumenttyp").selectOption({ label: "Vertrag" });
     await dialog.locator('select[name="periodId"]').selectOption({ label: String(CURRENT_YEAR) });
     await dialog.locator('select[name="unitId"]').selectOption({ label: "TOP 3" });
@@ -312,7 +316,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     await dialog.getByLabel("Beschreibung / Verwendungszweck").fill(PURPOSE);
     await dialog.getByLabel("Zahlungsstatus").selectOption({ label: "Offen" });
     await dialog.getByLabel("Notiz").fill("automatischer Test");
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(PROOF));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(PROOF));
     await dialog.getByRole("button", { name: "Speichern" }).click();
     await expect(dialog).toBeHidden();
 

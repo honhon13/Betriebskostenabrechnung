@@ -78,6 +78,11 @@ export interface CostDto extends ReviewInfo {
   costDate: string | null;
   supplier: string | null;
   invoiceNumber: string | null;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  netAmountCents: number | null;
+  /** MwSt.-Betrag. */
+  taxAmountCents: number | null;
   allocationKeyId: number;
   allocationKeyName: string;
   notes: string | null;

@@ -66,7 +66,7 @@ test.describe.serial("Prüfung von USER-Eingaben", () => {
     await dialog.getByLabel("Kostenart").selectOption({ label: "Rauchfangkehrer" });
     await dialog.getByLabel("Beschreibung").fill(COST);
     await dialog.getByLabel("Betrag (€)").fill("120,00");
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(COST_FILE));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(COST_FILE));
     await dialog.getByRole("button", { name: "Einreichen" }).click();
     await expect(dialog).toBeHidden();
 
@@ -81,13 +81,13 @@ test.describe.serial("Prüfung von USER-Eingaben", () => {
     await expect(dialog.getByText("Für TOP 1.")).toBeVisible();
     await dialog.getByLabel("Betrag (€)").fill("77,77");
     await dialog.getByLabel("Beschreibung / Verwendungszweck").fill(PURPOSE);
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(PROOF));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(PROOF));
     await dialog.getByRole("button", { name: "Einreichen" }).click();
     await expect(dialog).toBeHidden();
     await expect(row(user, PURPOSE)).toContainText("Ausstehende Prüfung");
 
     dialog = await openAdd(user, "Dokument einreichen");
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(DOCUMENT));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(DOCUMENT));
     await dialog.getByLabel("Dokumenttyp").selectOption({ label: "Vertrag" });
     // Verknüpfen lässt sich nur mit eigenen Kostenpositionen.
     await dialog.getByRole("checkbox", { name: new RegExp(COST) }).check();

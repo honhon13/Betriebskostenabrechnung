@@ -1,7 +1,15 @@
 "use client";
 
 import { LoaderCircle } from "lucide-react";
-import { useState, useTransition, type ReactNode, type SubmitEvent } from "react";
+import {
+  createContext,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+  type ReactNode,
+  type SubmitEvent,
+} from "react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,6 +22,16 @@ import { cn } from "@/lib/utils";
 import { FieldErrorsContext } from "./field";
 
 export type FormAction = (formData: FormData) => Promise<ActionState>;
+
+/** Für Bausteine im Formular, die auf dessen Ablauf reagieren müssen – z. B. ein Beleg-Upload. */
+export interface FormLifecycle {
+  /** Speichern sperren, solange im Formular noch etwas läuft. */
+  setBusy: (busy: boolean) => void;
+  /** Meldet sich nach erfolgreichem Speichern; der Rückgabewert meldet wieder ab. */
+  onSaved: (listener: () => void) => () => void;
+}
+
+export const FormLifecycleContext = createContext<FormLifecycle | null>(null);
 
 interface ActionFormProps {
   action: FormAction;
@@ -54,9 +72,25 @@ export function ActionForm({
 }: ActionFormProps) {
   const [state, setState] = useState<ActionState>(null);
   const [pending, startTransition] = useTransition();
+  const [busy, setBusy] = useState(false);
+  const savedListeners = useRef(new Set<() => void>());
+  const lifecycle = useMemo<FormLifecycle>(
+    () => ({
+      setBusy,
+      onSaved: (listener) => {
+        savedListeners.current.add(listener);
+        return () => {
+          savedListeners.current.delete(listener);
+        };
+      },
+    }),
+    [],
+  );
 
   function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Auch die Eingabetaste speichert nicht, solange z. B. noch ein Beleg hochgeladen wird.
+    if (busy) return;
     const form = event.currentTarget;
     const formData = new FormData(form);
 
@@ -83,6 +117,7 @@ export function ActionForm({
       const result = await action(formData);
       setState(result);
       if (result?.ok) {
+        for (const listener of savedListeners.current) listener();
         if (resetOnSuccess) form.reset();
         onSuccess?.(result);
       }
@@ -95,7 +130,7 @@ export function ActionForm({
     <form onSubmit={handleSubmit} noValidate className={cn("flex min-h-0 flex-col", className)}>
       <FieldErrorsContext value={fieldErrors}>
         <div className="-m-1 min-h-0 space-y-4 overflow-y-auto p-1">
-          {children}
+          <FormLifecycleContext value={lifecycle}>{children}</FormLifecycleContext>
           {state && !state.ok ? <Alert tone="danger" title={state.error} /> : null}
           {state?.ok && showSuccess ? (
             <Alert tone="success" title={state.message ?? "Gespeichert."} />
@@ -109,7 +144,7 @@ export function ActionForm({
             {cancelLabel}
           </Button>
         ) : null}
-        <Button type="submit" variant={submitVariant} disabled={pending}>
+        <Button type="submit" variant={submitVariant} disabled={pending || busy}>
           {pending ? <LoaderCircle className="animate-spin" aria-hidden /> : null}
           {submitLabel}
         </Button>

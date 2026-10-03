@@ -142,34 +142,65 @@ export const periodSchema = z.object({
   notes: optionalText(1000),
 });
 
-export const costSchema = z.object({
-  /** Abrechnungsjahr der Kostenposition. */
-  periodId: id,
-  categoryId: id,
-  description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
+/** Rechnungsdaten einer Kostenposition – von Hand eingetragen oder per OCR aus dem Beleg erkannt. */
+const costInvoiceFields = {
+  /** Bruttobetrag – er wird auf die TOPs verteilt. */
   amount: amountCents,
+  /** Rechnungsdatum. */
   costDate: optionalIsoDate,
+  /** Rechnungssteller. */
   supplier: optionalText(200),
   invoiceNumber: optionalText(100),
-  allocationKeyId: id,
-  unitIds: z.array(id).min(1, "Bitte mindestens eine TOP auswählen."),
-  notes: optionalText(1000),
-});
+  servicePeriodStart: optionalIsoDate,
+  servicePeriodEnd: optionalIsoDate,
+  netAmount: optionalAmountCents,
+  /** MwSt.-Betrag. */
+  taxAmount: optionalAmountCents,
+};
+
+const servicePeriodInOrder = (data: {
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+}) =>
+  !data.servicePeriodStart || !data.servicePeriodEnd || data.servicePeriodStart <= data.servicePeriodEnd;
+
+const servicePeriodError = {
+  path: ["servicePeriodEnd"],
+  message: "Das Ende des Leistungszeitraums liegt vor dem Beginn.",
+};
+
+export const costSchema = z
+  .object({
+    /** Abrechnungsjahr der Kostenposition. */
+    periodId: id,
+    categoryId: id,
+    description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
+    ...costInvoiceFields,
+    allocationKeyId: id,
+    unitIds: z.array(id).min(1, "Bitte mindestens eine TOP auswählen."),
+    notes: optionalText(1000),
+  })
+  .refine(servicePeriodInOrder, servicePeriodError);
+
+/**
+ * Belege, die im Kostenformular fotografiert bzw. ausgewählt und schon vor dem Speichern
+ * hochgeladen und ausgelesen wurden – beim Speichern werden sie mit der Kostenposition verknüpft.
+ */
+export const receiptIdsSchema = z.array(id).max(20);
 
 /**
  * Kosten, die ein Benutzer zur Prüfung einreicht. Umlageschlüssel und TOP-Zuordnung
  * legt die Verwaltung bei der Prüfung fest – sie kommen hier bewusst nicht vor.
  */
-export const costSubmissionSchema = z.object({
-  periodId: id,
-  categoryId: id,
-  description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
-  amount: amountCents,
-  costDate: optionalIsoDate,
-  supplier: optionalText(200),
-  invoiceNumber: optionalText(100),
-  notes: optionalText(1000),
-});
+export const costSubmissionSchema = z
+  .object({
+    periodId: id,
+    categoryId: id,
+    description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
+    ...costInvoiceFields,
+    notes: optionalText(1000),
+  })
+  .refine(servicePeriodInOrder, servicePeriodError);
 
 export const allocationValuesSchema = z.object({
   values: z.array(z.object({ keyId: id, unitId: id, value: decimal })),
@@ -238,11 +269,7 @@ export const documentMetaSchema = z
     /** Bruttobetrag. */
     amount: optionalAmountCents,
   })
-  .refine(
-    (data) =>
-      !data.servicePeriodStart || !data.servicePeriodEnd || data.servicePeriodStart <= data.servicePeriodEnd,
-    { path: ["servicePeriodEnd"], message: "Das Ende des Leistungszeitraums liegt vor dem Beginn." },
-  );
+  .refine(servicePeriodInOrder, servicePeriodError);
 
 // ---------------------------------------------------------------------------
 // Stammdaten

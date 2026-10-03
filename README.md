@@ -36,6 +36,10 @@ Aktion des jeweiligen Bereichs zuerst, auf dem Handy als Auswahl von unten:
   von „Meine Eingaben" ein, führt der Dialog danach dorthin.
 - **Mehrere Dokumente.** Der Upload-Dialog nimmt mehrere Dateien auf einmal und bleibt nach jedem
   Upload offen; er führt Buch, was gespeichert wurde und was nicht.
+- **Beleg zuerst.** Im Kostenformular steht der Beleg oben: fotografieren oder Datei wählen, die
+  OCR füllt die Felder, prüfen, speichern (siehe „Beleg im Kostenformular").
+- **Beleg fotografieren.** Auf Handy und Tablet öffnet die Schaltfläche im Kostenformular und im
+  Upload-Dialog direkt die Kamera; das Foto wird sofort gespeichert und ausgelesen.
 - **Was nicht geht, steht mit Begründung im Menü.** Kosten lassen sich nur in Jahren im Entwurf
   anlegen – ist jedes Jahr freigegeben, erklärt der Eintrag das, statt zu verschwinden.
 
@@ -126,7 +130,8 @@ eigenen Anteil in freigegebenen Jahren. Unter „Werte als Tabelle" stehen diese
 
 ```
 src/
-  app/           Seiten, Layouts, Route Handler und Server Actions (app/actions)
+  app/           Seiten, Layouts, Route Handler und Server Actions (app/actions);
+                 icon.png ist das Favicon (Datei-Konvention von Next.js)
   components/    UI-Bausteine (ui, forms, layout) und Fachkomponenten
   auth/          Passwort-Hashing, Sitzungen, Rechtekatalog, RBAC-Prüfungen
   services/      Fachlogik mit Rechteprüfung – einziger Weg zur Datenbank
@@ -170,7 +175,7 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | `units` | TOPs mit Wohnfläche und Personen |
 | `billing_periods` | Abrechnungsjahre mit Status Entwurf/Freigegeben und Prüfstand |
 | `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
-| `costs`, `cost_units` | Kostenpositionen und ihre TOP-Zuordnung |
+| `costs`, `cost_units` | Kostenpositionen mit Rechnungsdaten (Rechnungssteller, Nummer, Datum, Leistungszeitraum, Netto, MwSt., Brutto) und ihre TOP-Zuordnung |
 | `payments` | Einzahlungen je TOP mit Zahlungsstatus |
 | `documents`, `document_files`, `document_links` | Dokumente (Metadaten), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
 
@@ -246,13 +251,31 @@ Formate, die Azure nicht annimmt (WebP), ungültige Zugangsdaten, ein erschöpft
 und Zeitüberschreitungen. Der kostenlose Azure-Tarif (F0) liest nur die ersten zwei Seiten
 und Dateien bis 4 MB.
 
-Belege, die die Verwaltung über das Kosten- oder Einzahlungsformular anhängt, werden ebenfalls
-automatisch ausgelesen. Erkannte Werte ergänzen die leeren Felder des Dokuments – bei einer
-Rechnung zusätzlich Rechnungsdatum, Rechnungssteller und Rechnungsnummer der Kostenposition,
-soweit sie im Formular leer geblieben sind. Betrag und Zuordnung bleiben, wie eingegeben.
+### Beleg im Kostenformular
+
+Im Kostenformular der Verwaltung läuft die OCR **vor** dem Speichern:
+
+1. Beleg fotografieren (Handy/Tablet) oder Datei wählen – auch mehrere.
+2. Die Datei wird sofort als Dokument gespeichert und ausgelesen (derselbe Weg wie beim
+   Dokument-Upload: `POST /api/dokumente`, `OCRService`). Solange das läuft, ist „Speichern"
+   gesperrt.
+3. Erkannte Werte stehen in den noch leeren Feldern: Rechnungssteller, Rechnungsnummer,
+   Rechnungsdatum, Leistungszeitraum, Beschreibung, Netto, MwSt. und Betrag (brutto). Nicht
+   Erkanntes bleibt leer.
+4. Prüfen, korrigieren, speichern. Dabei werden die Belege mit der Kostenposition verknüpft.
+
+Bei genau einem Beleg übernimmt das Dokument die im Formular geprüften Rechnungsdaten – Position
+und Beleg widersprechen sich dann nicht; was die OCR erkannt hat, bleibt in `ocr_result`. Ein
+OCR-Fehler blockiert nichts: der Beleg ist gespeichert, die Felder lassen sich von Hand ausfüllen.
+Wird das Formular ohne Speichern geschlossen oder ein Beleg entfernt, wird das Dokument wieder
+gelöscht.
+
+Der Nachweis im Einzahlungsformular geht weiterhin mit dem Formular mit und wird nach dem
+Speichern ausgelesen; erkannte Werte ergänzen dort nur das Dokument.
 
 Von USER eingereichte Dokumente und Belege werden nicht automatisch ausgelesen (OCR setzt das
-Recht `document:ocr` voraus); die Verwaltung kann sie per Schaltfläche auslesen.
+Recht `document:ocr` voraus); die Verwaltung kann sie per Schaltfläche auslesen. Ihr Beleg im
+Kostenformular geht deshalb wie bisher erst beim Einreichen mit.
 
 ## Deployment auf Vercel
 

@@ -16,6 +16,8 @@ const MANUAL = `e2e-ocr-manuell-${RUN}.pdf`;
 const USER_FILE = `e2e-ocr-user-${RUN}.pdf`;
 const COST = `E2E Testkosten OCR ${RUN}`;
 const COST_FILE = `e2e-ocr-kostenbeleg-${RUN}.pdf`;
+const COST_UNREADABLE = `e2e-ocr-kostenbeleg-unlesbar-${RUN}.pdf`;
+const COST_DISCARDED = `e2e-ocr-kostenbeleg-verworfen-${RUN}.pdf`;
 const PURPOSE = `E2E Einzahlung OCR ${RUN}`;
 const PROOF_FILE = `e2e-ocr-nachweis-${RUN}.pdf`;
 
@@ -55,7 +57,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
   test("Rechnung: erkannte Daten stehen nach dem Upload in den Formularfeldern", async () => {
     const dialog = await openUpload(page);
     await expect(dialog.getByRole("checkbox", { name: /Automatisch per OCR auslesen/ })).toBeChecked();
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(INVOICE, "OCR-RECHNUNG"));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(INVOICE, "OCR-RECHNUNG"));
     await dialog.getByRole("button", { name: "Hochladen und auslesen" }).click();
 
     await expect(dialog.getByRole("heading", { name: "Erkannte Daten prüfen" })).toBeVisible();
@@ -114,7 +116,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
 
   test("bereits eingetragene Werte überschreibt die OCR nicht", async () => {
     const dialog = await openUpload(page);
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(OWN_VALUES, "OCR-RECHNUNG"));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(OWN_VALUES, "OCR-RECHNUNG"));
     await dialog.getByText("Rechnungsdaten (Rechnungssteller").click();
     // Im Upload-Schritt nennt auch der OCR-Hinweis den Rechnungssteller – daher über den Feldnamen.
     await dialog.locator('input[name="supplier"]').fill("Mein eigener Eintrag");
@@ -130,7 +132,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
 
   test("nicht lesbares Dokument: Upload gelingt, OCR meldet den Fehler", async () => {
     const dialog = await openUpload(page);
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(UNREADABLE, "OCR-UNLESBAR"));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(UNREADABLE, "OCR-UNLESBAR"));
     await dialog.getByRole("button", { name: "Hochladen und auslesen" }).click();
 
     await expect(dialog.getByText(`„${UNREADABLE}“ wurde hochgeladen.`)).toBeVisible();
@@ -157,7 +159,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
 
   test("nicht unterstütztes Format: WebP wird gespeichert, aber nicht ausgelesen", async () => {
     const dialog = await openUpload(page);
-    await dialog.locator('input[type="file"]').setInputFiles({
+    await dialog.locator('input[name="file"]').setInputFiles({
       name: WEBP,
       mimeType: "image/webp",
       buffer: Buffer.concat([Buffer.from("RIFF\0\0\0\0WEBPVP8 "), Buffer.from(WEBP)]),
@@ -175,7 +177,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
 
   test("Dokument ohne Rechnungsdaten: verarbeitet, Felder bleiben leer", async () => {
     const dialog = await openUpload(page);
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(PLAIN, "nur ein Brief"));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(PLAIN, "nur ein Brief"));
     await dialog.getByRole("button", { name: "Hochladen und auslesen" }).click();
 
     await expect(dialog.getByText("OCR verarbeitet – keine Daten übernommen")).toBeVisible();
@@ -188,7 +190,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
   test("ohne Häkchen bleibt der OCR-Status offen – Auslesen geht später per Schaltfläche", async () => {
     const dialog = await openUpload(page);
     await dialog.getByRole("checkbox", { name: /Automatisch per OCR auslesen/ }).uncheck();
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(MANUAL, "OCR-RECHNUNG"));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(MANUAL, "OCR-RECHNUNG"));
     await dialog.getByRole("button", { name: "Hochladen", exact: true }).click();
     await expect(dialog.getByRole("status").filter({ hasText: "1 Dokument hochgeladen" })).toContainText(MANUAL);
     // Kein Prüfschritt: das Formular ist wieder leer und bereit für das nächste Dokument.
@@ -220,32 +222,103 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await userPage.close();
   });
 
-  test("Kostenformular: angehängter Beleg wird ausgelesen und ergänzt leere Felder", async () => {
+  test("Kostenformular: Beleg wählen → OCR füllt die Felder → prüfen → speichern", async () => {
     await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
     const dialog = await openAdd(page, "Kostenposition hinzufügen");
-    await expect(dialog.getByText("automatisch per OCR ausgelesen")).toBeVisible();
-    await dialog.getByLabel("Beschreibung").fill(COST);
-    await dialog.getByLabel("Betrag (€)").fill("214,80");
-    // Lieferant bleibt leer, die Rechnungsnummer ist von Hand eingetragen.
+    await expect(dialog.getByText("sofort per OCR ausgelesen")).toBeVisible();
+    // Die Rechnungsnummer ist von Hand eingetragen – sie bleibt stehen.
     await dialog.getByLabel("Rechnungsnummer").fill("EIGENE-NR");
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(COST_FILE, "OCR-RECHNUNG"));
-    await dialog.getByRole("button", { name: "Speichern" }).click();
-    await expect(dialog).toBeHidden({ timeout: 15_000 });
+    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_FILE, "OCR-RECHNUNG"));
 
-    // Leere Felder der Kostenposition sind ergänzt, Eingetragenes bleibt.
+    // Die erkannten Werte stehen vor dem Speichern in den Feldern …
+    await expect(dialog.getByRole("status").filter({ hasText: COST_FILE })).toContainText(
+      "Ausgelesen – übernommen: Rechnungssteller, Rechnungsdatum, Leistungszeitraum von, " +
+        "Leistungszeitraum bis, Beschreibung, Netto, MwSt., Betrag (brutto)",
+    );
+    await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("Rauchfangkehrer Muster GmbH");
+    await expect(dialog.getByLabel("Rechnungsnummer")).toHaveValue("EIGENE-NR");
+    await expect(dialog.getByLabel("Rechnungsdatum")).toHaveValue("2026-03-15");
+    await expect(dialog.getByLabel("Leistungszeitraum von")).toHaveValue("2026-01-01");
+    await expect(dialog.getByLabel("Leistungszeitraum bis")).toHaveValue("2026-03-31");
+    await expect(dialog.getByLabel("Beschreibung")).toHaveValue("Kehrung, Abgasmessung");
+    await expect(dialog.getByLabel("Netto (€)")).toHaveValue("179,00");
+    await expect(dialog.getByLabel("MwSt. (€)")).toHaveValue("35,80");
+    await expect(dialog.getByLabel("Betrag (€)")).toHaveValue("214,80");
+
+    // … und lassen sich prüfen und korrigieren.
+    await dialog.getByLabel("Beschreibung").fill(COST);
+    await dialog.getByRole("button", { name: "Speichern" }).click();
+    await expect(dialog).toBeHidden();
+
     const costRow = row(page, COST);
     await expect(costRow).toContainText("Rauchfangkehrer Muster GmbH");
     await expect(costRow).toContainText("15.03.2026");
-    await page.getByRole("button", { name: `${COST} bearbeiten` }).click();
-    await expect(page.getByRole("dialog").getByLabel("Rechnungsnummer")).toHaveValue("EIGENE-NR");
-    await page.getByRole("dialog").getByRole("button", { name: "Abbrechen" }).click();
+    await expect(costRow).toContainText("Leistung 01.01.2026 – 31.03.2026 · netto € 179,00 · MwSt. € 35,80");
+    await expect(costRow).toContainText("€ 214,80");
+    await expect(costRow.getByRole("button", { name: COST_FILE })).toBeVisible();
 
-    // Das Dokument ist verarbeitet und hat die restlichen Rechnungsdaten bekommen.
+    // Das Dokument ist verknüpft, verarbeitet und trägt die im Formular geprüften Rechnungsdaten.
     await page.goto(`/dokumente?q=${RUN}`);
     const documentRow = row(page, COST_FILE);
     await expect(documentRow).toContainText("Verarbeitet");
+    await expect(documentRow).toContainText(COST);
+    await expect(documentRow).toContainText("Rauchfangkehrer Muster GmbH · Nr. EIGENE-NR");
     await expect(documentRow).toContainText("netto € 179,00 · MwSt. € 35,80 · brutto € 214,80");
     await expect(documentRow).toContainText("Leistung 01.01.2026 – 31.03.2026");
+    // Was die OCR erkannt hat, bleibt daneben gespeichert.
+    await page.getByRole("button", { name: `${COST_FILE} bearbeiten` }).click();
+    await expect(page.getByRole("dialog").getByRole("status").filter({ hasText: "Von OCR erkannt" })).toContainText(
+      "Nr. RE-2026-0042 ·",
+    );
+    await page.getByRole("dialog").getByRole("button", { name: "Abbrechen" }).click();
+  });
+
+  test("Kostenformular: ein OCR-Fehler blockiert nicht – Felder von Hand, mehrere Belege je Position", async () => {
+    await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
+    await page.getByRole("button", { name: `${COST} bearbeiten` }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Weiteren Beleg anhängen")).toBeVisible();
+    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_UNREADABLE, "OCR-UNLESBAR"));
+    await expect(dialog.getByRole("status").filter({ hasText: COST_UNREADABLE })).toContainText(
+      "Gespeichert – OCR-Fehler",
+    );
+    // Eingetragenes bleibt unangetastet, das Formular lässt sich normal speichern.
+    await expect(dialog.getByLabel("Rechnungsnummer")).toHaveValue("EIGENE-NR");
+    await dialog.getByLabel("Notiz").fill("zweiter Beleg von Hand ergänzt");
+    await dialog.getByRole("button", { name: "Speichern" }).click();
+    await expect(dialog).toBeHidden();
+
+    const costRow = row(page, COST);
+    await expect(costRow.getByRole("button", { name: COST_FILE })).toBeVisible();
+    await expect(costRow.getByRole("button", { name: COST_UNREADABLE })).toBeVisible();
+    // Bei mehreren Belegen behält jeder seine eigenen Daten – der erste wird nicht überschrieben.
+    await page.goto(`/dokumente?q=${RUN}`);
+    await expect(row(page, COST_FILE)).toContainText("Nr. EIGENE-NR");
+    await expect(row(page, COST_UNREADABLE)).toContainText("Fehler");
+  });
+
+  test("Kostenformular: Abbrechen oder Entfernen hinterlässt keinen verwaisten Beleg", async () => {
+    await page.goto(`/abrechnung/${CURRENT_YEAR}/kosten`);
+    const dialog = await openAdd(page, "Kostenposition hinzufügen");
+    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_DISCARDED, "OCR-RECHNUNG"));
+    await expect(dialog.getByRole("status").filter({ hasText: COST_DISCARDED })).toContainText("Ausgelesen");
+    // Entfernen löscht den Beleg; die übernommenen Werte bleiben zum Korrigieren stehen.
+    await dialog.getByRole("button", { name: `${COST_DISCARDED} entfernen` }).click();
+    await expect(dialog.getByText(COST_DISCARDED)).toHaveCount(0);
+    await expect(dialog.getByLabel("Rechnungssteller")).toHaveValue("Rauchfangkehrer Muster GmbH");
+
+    // Noch einmal hochladen und dann abbrechen.
+    await dialog.getByLabel("Beleg auswählen").setInputFiles(pdf(COST_DISCARDED, "OCR-RECHNUNG"));
+    await expect(dialog.getByRole("status").filter({ hasText: COST_DISCARDED })).toContainText("Ausgelesen");
+    await dialog.getByRole("button", { name: "Abbrechen" }).click();
+    await expect(dialog).toBeHidden();
+
+    // Das Aufräumen läuft im Hintergrund – kurz darauf ist der Beleg verschwunden.
+    await expect(async () => {
+      await page.goto(`/dokumente?q=${RUN}`);
+      await expect(row(page, COST_FILE)).toBeVisible();
+      await expect(row(page, COST_DISCARDED)).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
   });
 
   test("Einzahlungsformular: angehängter Nachweis wird ausgelesen", async () => {
@@ -255,7 +328,7 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await dialog.getByLabel("Betrag (€)").fill("55,55");
     await dialog.locator('select[name="unitId"]').selectOption({ label: "TOP 3" });
     await dialog.getByLabel("Beschreibung / Verwendungszweck").fill(PURPOSE);
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(PROOF_FILE, "nur ein Kontoauszug"));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(PROOF_FILE, "nur ein Kontoauszug"));
     await dialog.getByRole("button", { name: "Speichern" }).click();
     await expect(dialog).toBeHidden({ timeout: 15_000 });
     await expect(row(page, PURPOSE).getByRole("button", { name: PROOF_FILE })).toBeVisible();
@@ -272,7 +345,18 @@ test.describe.serial("Dokument-Upload mit OCR", () => {
     await expect(row(page, PURPOSE)).toHaveCount(0);
 
     await page.goto(`/dokumente?q=${RUN}`);
-    for (const name of [INVOICE, OWN_VALUES, UNREADABLE, WEBP, PLAIN, MANUAL, USER_FILE, COST_FILE, PROOF_FILE]) {
+    for (const name of [
+      INVOICE,
+      OWN_VALUES,
+      UNREADABLE,
+      WEBP,
+      PLAIN,
+      MANUAL,
+      USER_FILE,
+      COST_FILE,
+      COST_UNREADABLE,
+      PROOF_FILE,
+    ]) {
       await page.getByRole("button", { name: `${name} löschen` }).click();
       await page.getByRole("dialog").getByRole("button", { name: "Löschen" }).click();
       await expect(row(page, name)).toHaveCount(0);

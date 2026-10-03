@@ -127,7 +127,7 @@ test.describe.serial("Hinzufügen", () => {
     await dialog.locator('select[name="periodId"]').selectOption({ label: String(CURRENT_YEAR) });
 
     // Drei Dateien auf einmal: Typ und Jahr gelten für alle, Rechnungsdaten kommen je Dokument per OCR.
-    await dialog.locator('input[type="file"]').setInputFiles(FILES.map(pdf));
+    await dialog.locator('input[name="file"]').setInputFiles(FILES.map(pdf));
     await expect(dialog.getByText("3 Dateien gewählt")).toBeVisible();
     await expect(dialog.getByText("Rechnungsdaten (Rechnungssteller")).toBeHidden();
     await dialog.getByRole("button", { name: "3 Dokumente hochladen und auslesen" }).click();
@@ -136,14 +136,14 @@ test.describe.serial("Hinzufügen", () => {
     for (const name of FILES) await expect(log).toContainText(name);
 
     // Der Dialog bleibt offen: ein weiteres Dokument – diesmal mit Prüfschritt.
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(LATER));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(LATER));
     await dialog.getByRole("button", { name: "Hochladen und auslesen" }).click();
     await expect(dialog.getByRole("heading", { name: "Erkannte Daten prüfen" })).toBeVisible();
     await dialog.getByRole("button", { name: "Speichern" }).click();
     await expect(log).toContainText("4 Dokumente hochgeladen");
 
     // Dieselbe Datei noch einmal: abgelehnt – das vorhandene Dokument bleibt unberührt.
-    await dialog.locator('input[type="file"]').setInputFiles(pdf(FILES[0]));
+    await dialog.locator('input[name="file"]').setInputFiles(pdf(FILES[0]));
     await dialog.getByRole("button", { name: "Hochladen und auslesen" }).click();
     await expect(log).toContainText("4 Dokumente hochgeladen · 1 nicht gespeichert");
     await expect(log).toContainText("wurde bereits als");

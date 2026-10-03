@@ -43,6 +43,13 @@
       "when": 1790972749455,
       "tag": "0005_review_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791009683812,
+      "tag": "0006_cost_invoice_data",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleCheck, CircleX, LoaderCircle, ScanText, Upload } from "lucide-react";
+import { Camera, CircleCheck, CircleX, LoaderCircle, ScanText, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type SubmitEvent } from "react";
 
@@ -138,6 +138,8 @@ function DocumentUpload({
   // offen, damit sich beliebig viele Dokumente nacheinander hochladen lassen.
   const [formKey, setFormKey] = useState(0);
   const several = selectedCount > 1;
+  const form = useRef<HTMLFormElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
 
   /** Lädt eine Datei hoch. Fehler kommen als Text zurück, damit die übrigen Dateien weiterlaufen. */
   async function upload(base: FormData, selected: File): Promise<UploadResponse | string> {
@@ -174,6 +176,17 @@ function DocumentUpload({
       setError("Bitte eine Datei auswählen.");
       return;
     }
+    start(formData, files);
+  }
+
+  /** Foto direkt aus der Kamera: ohne weiteren Klick hochladen – mit den Angaben, die im Formular stehen. */
+  function handlePhoto(input: HTMLInputElement) {
+    const photo = input.files?.[0];
+    if (photo && form.current) start(new FormData(form.current), [photo]);
+    input.value = "";
+  }
+
+  function start(formData: FormData, files: File[]) {
     setError(null);
     // Rechnungsnummer, Datum und Beträge gehören zu einem einzelnen Dokument.
     if (files.length > 1) {
@@ -217,8 +230,37 @@ function DocumentUpload({
   }
 
   return (
-    <form key={formKey} onSubmit={handleSubmit} className="space-y-4">
+    <form ref={form} key={formKey} onSubmit={handleSubmit} className="space-y-4">
       {entries.length > 0 ? <UploadLog entries={entries} submission={fields.submission} /> : null}
+
+      {/* Nur auf Handy und Tablet sichtbar: Kamera öffnen, Foto wird sofort hochgeladen. */}
+      <div className="camera-only w-full flex-col gap-1.5">
+        <Button
+          variant="secondary"
+          className="w-full"
+          onClick={() => camera.current?.click()}
+          disabled={pending}
+        >
+          <Camera aria-hidden />
+          Beleg fotografieren
+        </Button>
+        <input
+          ref={camera}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden
+          disabled={pending}
+          onChange={(event) => handlePhoto(event.currentTarget)}
+        />
+        <p className="text-xs text-subtle">
+          Das Foto wird sofort gespeichert
+          {useOcr ? " und ausgelesen – danach kannst du die erkannten Daten prüfen" : ""}. Oder
+          wähle unten eine Datei.
+        </p>
+      </div>
 
       <label className="block space-y-1.5">
         <span className="text-sm font-medium">

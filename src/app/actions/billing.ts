@@ -15,6 +15,7 @@ import {
   costSchema,
   parseId,
   periodSchema,
+  receiptIdsSchema,
   type CostInput,
 } from "@/lib/validation";
 import {
@@ -23,6 +24,7 @@ import {
 } from "@/services/allocation.service";
 import { createCost, deleteCost, fillCostFromOcr, updateCost } from "@/services/costs.service";
 import {
+  attachReceiptsToCost,
   checkUpload,
   isOcrAvailable,
   processDocumentOcr,
@@ -87,10 +89,10 @@ async function attachInvoice(
       documentDate: input.costDate,
       supplier: input.supplier,
       invoiceNumber: input.invoiceNumber,
-      servicePeriodStart: null,
-      servicePeriodEnd: null,
-      netAmount: null,
-      taxAmount: null,
+      servicePeriodStart: input.servicePeriodStart,
+      servicePeriodEnd: input.servicePeriodEnd,
+      netAmount: input.netAmount,
+      taxAmount: input.taxAmount,
       amount: input.amount,
     });
   } catch (error) {
@@ -107,18 +109,50 @@ async function attachInvoice(
   }
 }
 
+/**
+ * Verknüpft die Belege, die das Formular schon vor dem Speichern hochgeladen und ausgelesen hat
+ * (ReceiptCapture). Die erkannten Werte standen dabei in den Formularfeldern – was jetzt im
+ * Formular steht, ist geprüft und gilt bei einem einzelnen Beleg auch für das Dokument.
+ */
+async function attachCapturedReceipts(
+  actor: SessionUser,
+  costId: number,
+  input: CostInput,
+  receiptIds: number[],
+): Promise<void> {
+  try {
+    await attachReceiptsToCost(actor, costId, receiptIds, {
+      documentDate: input.costDate,
+      supplier: input.supplier,
+      invoiceNumber: input.invoiceNumber,
+      servicePeriodStart: input.servicePeriodStart,
+      servicePeriodEnd: input.servicePeriodEnd,
+      netAmountCents: input.netAmount,
+      taxAmountCents: input.taxAmount,
+      amountCents: input.amount,
+    });
+  } catch (error) {
+    revalidatePath("/", "layout");
+    const reason = error instanceof DomainError ? ` ${error.message}` : "";
+    throw new DomainError(
+      `Die Kostenposition ist gespeichert, der Beleg konnte aber nicht verknüpft werden.${reason} ` +
+        "Er liegt unter „Dokumente“ und lässt sich dort zuordnen.",
+    );
+  }
+}
+
 export async function createCostAction(formData: FormData): Promise<ActionState> {
   return runAction(async () => {
     const actor = await requireActor();
     const input = costSchema.parse(formToObject(formData, ["unitIds"]));
+    const receiptIds = receiptIdsSchema.parse(formData.getAll("documentIds"));
     const file = await readUpload(formData);
-    if (file) {
-      // Erst prüfen, dann anlegen: ein abgelehnter Beleg soll keine halbe Erfassung hinterlassen.
-      authorizeGlobalWrite(actor, "document:write");
-      await checkUpload(input.periodId, file);
-    }
+    if (file || receiptIds.length > 0) authorizeGlobalWrite(actor, "document:write");
+    // Erst prüfen, dann anlegen: ein abgelehnter Beleg soll keine halbe Erfassung hinterlassen.
+    if (file) await checkUpload(input.periodId, file);
 
     const costId = await createCost(actor, input);
+    if (receiptIds.length > 0) await attachCapturedReceipts(actor, costId, input, receiptIds);
     if (file) await attachInvoice(actor, costId, input, file);
     revalidatePath("/", "layout");
   });
@@ -129,13 +163,13 @@ export async function updateCostAction(costId: number, formData: FormData): Prom
     const actor = await requireActor();
     const id = parseId(costId);
     const input = costSchema.parse(formToObject(formData, ["unitIds"]));
+    const receiptIds = receiptIdsSchema.parse(formData.getAll("documentIds"));
     const file = await readUpload(formData);
-    if (file) {
-      authorizeGlobalWrite(actor, "document:write");
-      await checkUpload(input.periodId, file);
-    }
+    if (file || receiptIds.length > 0) authorizeGlobalWrite(actor, "document:write");
+    if (file) await checkUpload(input.periodId, file);
 
     await updateCost(actor, id, input);
+    if (receiptIds.length > 0) await attachCapturedReceipts(actor, id, input, receiptIds);
     if (file) await attachInvoice(actor, id, input, file);
     revalidatePath("/", "layout");
   });
