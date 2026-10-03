@@ -8,6 +8,7 @@ import {
   LogOut,
   Menu,
   ReceiptText,
+  Repeat,
   Send,
   Settings,
   Wallet,
@@ -78,13 +79,23 @@ interface AppShellProps {
   review: { pending: number } | null;
   /** „Meine Eingaben“ für Benutzer, die Einträge einreichen dürfen. */
   submissions: boolean;
+  /** „Wiederkehrende Kosten“ für Benutzer, die Vorlagen sehen und verwenden dürfen. */
+  recurring: boolean;
   logoutAction: () => Promise<void>;
   children: ReactNode;
 }
 
-export function AppShell({ user, review, submissions, logoutAction, children }: AppShellProps) {
+export function AppShell({
+  user,
+  review,
+  submissions,
+  recurring,
+  logoutAction,
+  children,
+}: AppShellProps) {
   const nav: NavItem[] = [
     ...MAIN_NAV,
+    ...(recurring ? [{ href: "/wiederkehrend", label: "Wiederkehrende Kosten", icon: Repeat }] : []),
     ...(review
       ? [{ href: "/pruefung", label: "Prüfung", icon: ClipboardCheck, badge: review.pending }]
       : []),

@@ -72,6 +72,8 @@ test.describe("Mobil", () => {
       "/einstellungen",
       "/einstellungen/stammdaten",
       "/einstellungen/benutzer",
+      "/einstellungen/protokoll",
+      "/wiederkehrend",
     ]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -145,6 +147,27 @@ test.describe("Mobil", () => {
     await expect(dialog.getByRole("button", { name: "Beleg fotografieren" })).toBeVisible();
     await dialog.getByRole("button", { name: "Fertig" }).click();
     await expect(dialog).toBeHidden();
+  });
+
+  test("Jahresabrechnung erstellen: auf dem Handy öffnen und herunterladen statt einbetten", async ({
+    page,
+  }) => {
+    await login(page, "top2");
+    await page.goto("/abrechnung");
+    await page.getByRole("button", { name: "Jahresabrechnung erstellen" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Abrechnungsjahr").selectOption({ label: String(RELEASED_YEAR) });
+    await dialog.getByRole("button", { name: "PDF erstellen" }).click();
+    await expect(dialog.getByText("Die Jahresabrechnung ist erstellt.")).toBeVisible();
+
+    // Handy-Browser betten PDFs nicht ein – angeboten werden Öffnen und Herunterladen.
+    await expect(dialog.locator("iframe")).toBeHidden();
+    await expect(dialog.getByRole("link", { name: "In neuem Tab öffnen" })).toBeInViewport();
+    await expect(dialog.getByRole("link", { name: "Herunterladen" })).toHaveAttribute(
+      "href",
+      `/api/abrechnung/${RELEASED_YEAR}/pdf?download=1`,
+    );
+    await expectNoHorizontalOverflow(page);
   });
 
   test("Testdaten der Foto-Tests wieder löschen", async ({ page }) => {

@@ -207,6 +207,45 @@ export const allocationValuesSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Wiederkehrende Kosten
+// ---------------------------------------------------------------------------
+
+/** Vorlage für wiederkehrende Kosten. Die Beschreibung lässt Platz für den angehängten Zeitraum. */
+export const recurringCostSchema = z
+  .object({
+    categoryId: id,
+    description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(160),
+    amountType: z.enum(["fixed", "variable"]),
+    /** Betrag je Zeitraum – bei „variable“ nur ein Richtwert und daher optional. */
+    amount: optionalAmountCents,
+    interval: z.enum(["monthly", "quarterly", "yearly"]),
+    supplier: optionalText(200),
+    allocationKeyId: id,
+    unitIds: z.array(id).min(1, "Bitte mindestens eine TOP auswählen."),
+    notes: optionalText(1000),
+    isActive: checkbox,
+  })
+  .refine((data) => data.amount !== 0, { path: ["amount"], message: "Der Betrag darf nicht 0 sein." })
+  .refine((data) => data.amount === null || Math.abs(data.amount) <= MAX_AMOUNT_CENTS, {
+    path: ["amount"],
+    message: "Der Betrag ist zu groß.",
+  })
+  .refine((data) => data.amountType === "variable" || data.amount !== null, {
+    path: ["amount"],
+    message: "Bitte den Betrag je Zeitraum angeben.",
+  });
+
+/** Kostenpositionen aus einer Vorlage erzeugen: Jahr, Zeiträume (Monat/Quartal/Jahr) und Betrag. */
+export const recurringGenerateSchema = z.object({
+  periodId: id,
+  slots: z
+    .array(z.coerce.number().int().min(1).max(12))
+    .min(1, "Bitte mindestens einen Zeitraum auswählen.")
+    .max(12),
+  amount: amountCents,
+});
+
+// ---------------------------------------------------------------------------
 // Einzahlungen
 // ---------------------------------------------------------------------------
 
@@ -323,6 +362,8 @@ export const rolePermissionsSchema = z.object({
 });
 
 export type CostInput = z.infer<typeof costSchema>;
+export type RecurringCostInput = z.infer<typeof recurringCostSchema>;
+export type RecurringGenerateInput = z.infer<typeof recurringGenerateSchema>;
 export type PaymentInput = z.infer<typeof paymentSchema>;
 export type CostSubmissionInput = z.infer<typeof costSubmissionSchema>;
 export type PaymentSubmissionInput = z.infer<typeof paymentSubmissionSchema>;

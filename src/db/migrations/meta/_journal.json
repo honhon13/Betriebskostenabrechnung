@@ -50,6 +50,13 @@
       "when": 1791009683812,
       "tag": "0006_cost_invoice_data",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791043909590,
+      "tag": "0007_audit_recurring",
+      "breakpoints": true
     }
   ]
 }

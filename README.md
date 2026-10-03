@@ -7,12 +7,13 @@ TOP freigeben. Die TOPs reichen eigene Einträge ein, die Verwaltung prüft sie.
 | Bereich | Inhalt |
 | --- | --- |
 | **Dashboard** | Abrechnungsperiode, Gesamtkosten, Kostenverlauf (Diagramm je Monat oder Jahr), Kosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
-| **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen, Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente |
+| **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen, Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente; Jahresabrechnung als PDF |
 | **Einzahlungen** | Je TOP mit Datum, Betrag, Jahr, Beschreibung, Zahlungsstatus und Nachweis; Guthaben/Nachzahlung je TOP |
 | **Dokumente** | Rechnungen, Zahlungsnachweise, Verträge, Sonstiges – mit Suche, Filtern, Sortierung, Vorschau und Download |
+| **Wiederkehrende Kosten** | Vorlagen mit Betrag, Intervall, Umlageschlüssel und TOP-Zuordnung; daraus Kostenpositionen je Monat, Quartal oder Jahr erzeugen |
 | **Meine Eingaben** (USER) | Kosten, Einzahlungen, Dokumente und Abrechnungsjahre einreichen; Prüfstand und Kommentar der Verwaltung sehen |
 | **Prüfung** (ADMIN) | Eingereichte Einträge ansehen, freigeben, ablehnen, bearbeiten oder löschen |
-| **Einstellungen** | Konto, Stammdaten (TOPs, Kostenarten, Umlageschlüssel), Benutzer und Rollen |
+| **Einstellungen** | Konto, Stammdaten (TOPs, Kostenarten, Umlageschlüssel), Benutzer und Rollen, Audit-Log (ADMIN) |
 
 Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · Drizzle ORM · Neon PostgreSQL ·
 deploybar auf Vercel.
@@ -46,6 +47,75 @@ Aktion des jeweiligen Bereichs zuerst, auf dem Handy als Auswahl von unten:
 
 Zwei Grenzen sind gewollt: Je Jahr gibt es genau eine Abrechnung, und dieselbe Datei lässt sich
 je Abrechnungsjahr nur einmal hochladen (Schutz vor versehentlichen Doppel-Uploads).
+
+## Jahresabrechnung als PDF
+
+Im Bereich **Abrechnung** – in der Jahresübersicht und im Kopf jedes Jahres – steht
+**Jahresabrechnung erstellen**: Abrechnungsjahr wählen, „PDF erstellen", ansehen, in einem neuen
+Tab öffnen oder herunterladen. Auf dem Handy wird das PDF nicht eingebettet, sondern geöffnet
+bzw. heruntergeladen.
+
+- **Inhalt:** Ergebnis (Gesamtkosten, Einzahlungen, Guthaben/Nachzahlung je TOP),
+  Kostenaufstellung nach Kostenart mit den Anteilen je TOP, Einzahlungen und Belegübersicht –
+  A4, mit Seitenzahlen, zum Drucken.
+- **Nur Freigegebenes:** Es zählen freigegebene Kostenpositionen, eingegangene und freigegebene
+  Einzahlungen und freigegebene Belege – auch wenn die Verwaltung das PDF erstellt. Ein Jahr im
+  Entwurf lässt sich als PDF erzeugen, ist dann aber deutlich als **Entwurf** gekennzeichnet.
+- **Sichtbereich:** Die Verwaltung wählt zwischen der Gesamtabrechnung aller TOPs und der
+  Abrechnung einer einzelnen TOP. USER bekommen immer nur die eigene TOP in freigegebenen
+  Jahren – der Parameter einer fremden TOP ändert daran nichts.
+- **Immer aktuell:** Das PDF wird bei jedem Abruf aus den gespeicherten Daten erzeugt
+  (`GET /api/abrechnung/<jahr>/pdf`, optional `?top=2` und `?download`); es wird keine Datei
+  abgelegt. Die Beträge stammen aus derselben Berechnung wie die Oberfläche.
+
+Erzeugt wird mit `pdf-lib` (reines JavaScript, läuft in einer Vercel Function): der
+Seitenaufbau liegt in `src/lib/pdf/layout.ts`, die Abrechnung in `src/lib/pdf/annual-statement.ts`.
+
+## Wiederkehrende Kosten
+
+Unter **Wiederkehrende Kosten** pflegt die Verwaltung Vorlagen für alles, was regelmäßig
+anfällt: Kostenart, Beschreibung, Betrag, Intervall (monatlich, quartalsweise, jährlich),
+Rechnungssteller, Umlageschlüssel und TOP-Zuordnung.
+
+- **Betragstyp:** *Fixbetrag* wird beim Erzeugen vorgeschlagen; bei *Variabel* trägt man den
+  Betrag jedes Mal laut Rechnung ein (ein Richtwert ist optional).
+- **Erzeugen:** Je Vorlage Abrechnungsjahr wählen und die Zeiträume anhaken – je Monat, Quartal
+  bzw. Jahr entsteht eine Kostenposition, z. B. „Hausbetreuung Jänner 2026". Der Zeitraum wird
+  zum Leistungszeitraum, sein erster Tag zum Rechnungsdatum. Bereits erzeugte Zeiträume sind
+  gesperrt; die Liste zeigt je Vorlage „3 von 12".
+- **Unabhängig:** Erzeugte Positionen sind gewöhnliche Kostenpositionen und lassen sich einzeln
+  ändern oder löschen. Änderungen an der Vorlage wirken nur auf künftig erzeugte Positionen;
+  wird die Vorlage gelöscht, bleiben die Positionen bestehen.
+- **Rechte:** Anlegen und Ändern (`recurring:write`) sowie Löschen (`recurring:delete`) darf nur
+  ADMIN. USER sehen aktive Vorlagen, an denen ihre TOP beteiligt ist (`recurring:read`), und
+  reichen daraus Kosten zur Prüfung ein – mit Schlüssel und TOPs der Vorlage.
+
+## Audit-Log
+
+Unter *Einstellungen → Audit-Log* (nur ADMIN, Recht `audit:read`) steht, wer wann was getan hat:
+Zeitpunkt, Benutzer und TOP, Aktion, betroffener Datensatz und – bei Änderungen – vorheriger und
+neuer Wert. Filtern lässt sich nach Bereich, Benutzer, Zeitraum und Suchtext.
+
+Protokolliert werden: Anmeldung, fehlgeschlagene Anmeldung, Abmeldung, Passwortwechsel und
+-reset; Abrechnungsjahre (angelegt, eingereicht, freigegeben, Freigabe zurückgenommen,
+gelöscht) und Umlageschlüssel-Werte; Kosten, Einzahlungen und Dokumente (angelegt bzw.
+hochgeladen, eingereicht, geändert, gelöscht, OCR); Freigaben und Ablehnungen der Prüfung;
+Vorlagen für wiederkehrende Kosten; Benutzer, Rollen und Stammdaten.
+
+- **Unveränderlich:** Die Anwendung kennt keine Funktion zum Ändern oder Löschen von
+  Einträgen, und ein Datenbank-Trigger weist `UPDATE`, `DELETE` und `TRUNCATE` auf `audit_log`
+  ab – auch für Zugriffe an der Anwendung vorbei.
+- **Gemeinsam mit der Änderung:** Wo ein Service in einer Transaktion schreibt, entsteht der
+  Protokolleintrag in derselben Transaktion.
+- **Für sich lesbar:** Benutzername, TOP und die Bezeichnung des Datensatzes werden als
+  Momentaufnahme gespeichert – das Protokoll bleibt verständlich, wenn Benutzer oder
+  Datensätze später gelöscht werden.
+- **Kein Fluten:** Fehlversuche mit unbekanntem Benutzernamen oder während einer Kontosperre
+  werden nicht protokolliert, weil sie sich beliebig oft wiederholen lassen.
+
+Der Katalog der Aktionen steht in `src/lib/audit.ts`. Eine weitere Aktion – etwa Backup,
+Wiederherstellung oder Datenbank-Reset, sobald es diese Funktionen gibt – ist eine Zeile dort
+plus ein Aufruf von `recordAudit` im jeweiligen Service.
 
 ## Lokal starten
 
@@ -139,7 +209,8 @@ src/
   services/      Fachlogik mit Rechteprüfung – einziger Weg zur Datenbank
     ocr/         OCRService (Azure Document Intelligence)
   db/            Drizzle-Schema, Migrationen, Seed
-  lib/           Reine Hilfsfunktionen: Verteilung, Monatsübersicht, Beträge, Validierung
+  lib/           Reine Hilfsfunktionen: Verteilung, Monatsübersicht, Beträge, Validierung,
+                 Audit-Katalog, PDF-Aufbau (lib/pdf)
   types/         DTOs zwischen Services und Oberfläche
 tests/           Unit-Tests (Vitest)
 e2e/             End-to-End-Tests (Playwright)
@@ -177,9 +248,11 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | `units` | TOPs mit Wohnfläche und Personen |
 | `billing_periods` | Abrechnungsjahre mit Status Entwurf/Freigegeben und Prüfstand |
 | `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
-| `costs`, `cost_units` | Kostenpositionen mit Rechnungsdaten (Rechnungssteller, Nummer, Datum, Leistungszeitraum, Netto, MwSt., Brutto) und ihre TOP-Zuordnung |
+| `costs`, `cost_units` | Kostenpositionen mit Rechnungsdaten (Rechnungssteller, Nummer, Datum, Leistungszeitraum, Netto, MwSt., Brutto) und ihre TOP-Zuordnung; `recurring_cost_id` vermerkt die Vorlage, aus der eine Position erzeugt wurde |
+| `recurring_costs`, `recurring_cost_units` | Vorlagen für wiederkehrende Kosten und ihre TOP-Zuordnung |
 | `payments` | Einzahlungen je TOP mit Zahlungsstatus |
 | `documents`, `document_files`, `document_links` | Dokumente (Metadaten), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
+| `audit_log` | Audit-Log: Zeitpunkt, Benutzer/TOP, Aktion, Datensatz, vorherige/neue Werte – nur anhängbar |
 
 `billing_periods`, `costs`, `payments` und `documents` tragen jeweils Prüfstand, Prüfdatum,
 Prüfer und Kommentar.
@@ -191,6 +264,7 @@ Prüfer und Kommentar.
 | Neues Recht | Eintrag in `src/auth/permissions.ts`, Prüfung im Service |
 | Neue Rolle | In der Oberfläche anlegen oder `ROLE_DEFINITIONS` ergänzen |
 | Neuer Umlageschlüssel | *Einstellungen → Stammdaten* (Werte je Abrechnungsjahr) |
+| Neue Aktion im Audit-Log | Zeile in `AUDIT_ACTIONS` (`src/lib/audit.ts`), `recordAudit(...)` im Service |
 | Neue „Hinzufügen"-Aktion | Funktion in `ADD_ACTIONS` (`src/components/add/add-button.tsx`): Recht prüfen, Formular in `AddFormDialog` zurückgeben |
 | Anderer OCR-Anbieter | Klasse mit `OCRService` + `services/ocr/index.ts` |
 | Schemaänderung | `src/db/schema.ts` ändern → `npm run db:generate` → `npm run db:migrate` |
@@ -306,7 +380,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte |
+| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |

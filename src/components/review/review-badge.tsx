@@ -1,13 +1,8 @@
 import { CircleCheck, CircleX, Hourglass } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { REVIEW_STATUS_LABELS } from "@/lib/labels";
 import type { ReviewStatus } from "@/types/billing";
-
-export const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
-  pending: "Ausstehende Prüfung",
-  approved: "Freigegeben",
-  rejected: "Abgelehnt",
-};
 
 /** Prüfstand eines eingereichten Eintrags – immer mit Symbol und Wort. */
 export function ReviewBadge({ status }: { status: ReviewStatus }) {

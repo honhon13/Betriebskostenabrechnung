@@ -17,6 +17,9 @@ export default async function globalSetup() {
   try {
     await db.delete(schema.documents).where(like(schema.documents.fileName, "e2e-%"));
     await db.delete(schema.costs).where(like(schema.costs.description, "E2E Testkosten %"));
+    await db
+      .delete(schema.recurringCosts)
+      .where(like(schema.recurringCosts.description, "E2E Testkosten %"));
     await db.delete(schema.payments).where(like(schema.payments.purpose, "E2E Einzahlung %"));
     await db.delete(schema.users).where(like(schema.users.username, "e2e-%"));
     // Folgejahre legen nur Tests an – ein Rest davon würde den nächsten Lauf stören.

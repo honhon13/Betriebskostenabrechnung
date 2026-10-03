@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { ForbiddenError } from "@/auth/errors";
 import { ROLE_DEFINITIONS, ROLE_KEYS } from "@/auth/permissions";
 import * as allocation from "@/services/allocation.service";
+import * as annualStatement from "@/services/annual-statement.service";
+import * as audit from "@/services/audit.service";
 import * as costs from "@/services/costs.service";
 import * as masterdata from "@/services/masterdata.service";
 import * as payments from "@/services/payments.service";
 import * as periods from "@/services/periods.service";
+import * as recurring from "@/services/recurring.service";
 import * as review from "@/services/review.service";
 import * as submissions from "@/services/submissions.service";
 import * as documents from "@/services/documents.service";
@@ -72,6 +75,18 @@ const documentMeta = {
   amount: null,
 };
 const file = { name: "x.pdf", bytes: Buffer.from("%PDF-1.4") };
+const template = {
+  categoryId: 1,
+  description: "x",
+  amountType: "fixed" as const,
+  amount: 100,
+  interval: "monthly" as const,
+  supplier: null,
+  allocationKeyId: 1,
+  unitIds: [1],
+  notes: null,
+  isActive: true,
+};
 const key = { name: "x", unitLabel: "", description: null, isActive: true };
 const category = { name: "x", description: null, defaultAllocationKeyId: null, isActive: true };
 
@@ -121,6 +136,13 @@ const forbiddenForUser: Record<string, () => Promise<unknown>> = {
   createAllocationKey: () => masterdata.createAllocationKey(user, key),
   updateAllocationKey: () => masterdata.updateAllocationKey(user, 1, key),
   deleteAllocationKey: () => masterdata.deleteAllocationKey(user, 1),
+  // Wiederkehrende Kosten: USER verwenden Vorlagen, pflegen sie aber nicht.
+  createRecurringCost: () => recurring.createRecurringCost(user, template),
+  updateRecurringCost: () => recurring.updateRecurringCost(user, 1, template),
+  deleteRecurringCost: () => recurring.deleteRecurringCost(user, 1),
+  // Audit-Log
+  listAuditLog: () => audit.listAuditLog(user),
+  listAuditActors: () => audit.listAuditActors(user),
   // Benutzer & Rollen
   listUsers: () => users.listUsers(user),
   createUser: () =>
@@ -169,6 +191,10 @@ const forbiddenForReader: Record<string, () => Promise<unknown>> = {
   updateOwnDocument: () => submissions.updateOwnDocument(reader, 1, documentMeta),
   // Verknüpfungsziele für den Upload-Dialog unter „Hinzufügen“.
   listOwnLinkOptions: () => submissions.listOwnLinkOptions(reader),
+  // Vorlagen sehen und verwenden ist ein eigenes Recht.
+  listRecurringCosts: () => recurring.listRecurringCosts(reader),
+  generateCostsFromTemplate: () =>
+    recurring.generateCostsFromTemplate(reader, 1, { periodId: 1, slots: [1], amount: 100 }),
 };
 
 describe("Services lehnen USER serverseitig ab", () => {
@@ -185,7 +211,7 @@ describe("Services lehnen USER serverseitig ab", () => {
   });
 
   it("deckt jede schreibende Service-Funktion ab", () => {
-    const mutating = [allocation, costs, documents, masterdata, payments, periods, review, users]
+    const mutating = [allocation, costs, documents, masterdata, payments, periods, recurring, review, users]
       .flatMap((module) => Object.keys(module))
       .filter((name) =>
         /^(create|update|delete|set|save|reset|upload|run|process|fill|review)/.test(name),
@@ -206,5 +232,26 @@ describe("Einreichen setzt das jeweilige Recht voraus", () => {
   it("deckt jede einreichende Service-Funktion ab", () => {
     const submitting = Object.keys(submissions).filter((name) => /^(submit|updateOwn)/.test(name));
     expect(submitting.filter((name) => !(name in forbiddenForReader))).toEqual([]);
+  });
+});
+
+describe("Neue Rechte der Systemrollen", () => {
+  const admin = ROLE_DEFINITIONS.find((role) => role.key === ROLE_KEYS.ADMIN)!.permissions;
+
+  it("USER verwenden Vorlagen, dürfen sie aber weder pflegen noch das Audit-Log lesen", () => {
+    expect(user.permissions).toContain("recurring:read");
+    for (const permission of ["recurring:write", "recurring:delete", "audit:read"] as const) {
+      expect(user.permissions).not.toContain(permission);
+      expect(admin).toContain(permission);
+    }
+  });
+
+  it("die Jahresabrechnung als PDF setzt das Leserecht auf Kosten voraus", async () => {
+    const nobody: SessionUser = { ...user, permissions: ["dashboard:view"] };
+    await expect(annualStatement.getAnnualStatement(nobody, 2025)).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("das Audit-Log kennt keine Funktion zum Ändern oder Löschen", () => {
+    expect(Object.keys(audit).filter((name) => /^(update|delete|remove|clear|reset|set)/i.test(name))).toEqual([]);
   });
 });

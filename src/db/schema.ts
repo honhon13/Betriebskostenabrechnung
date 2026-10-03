@@ -208,6 +208,51 @@ export const costCategories = pgTable("cost_categories", {
   createdAt,
 });
 
+/** fixed = fester Betrag je Zeitraum, variable = der Betrag wird beim Erzeugen eingegeben. */
+export const recurringAmountType = pgEnum("recurring_amount_type", ["fixed", "variable"]);
+
+export const recurringInterval = pgEnum("recurring_interval", ["monthly", "quarterly", "yearly"]);
+
+/**
+ * Vorlage für wiederkehrende Kosten (z. B. monatliche Hausbetreuung). Aus ihr entstehen
+ * gewöhnliche Kostenpositionen – die Vorlage selbst zählt in keiner Abrechnung.
+ */
+export const recurringCosts = pgTable("recurring_costs", {
+  id: serial("id").primaryKey(),
+  categoryId: integer("category_id")
+    .notNull()
+    .references(() => costCategories.id, { onDelete: "restrict" }),
+  /** Beschreibung der erzeugten Kostenpositionen – der Zeitraum wird angehängt. */
+  description: text("description").notNull(),
+  amountType: recurringAmountType("amount_type").notNull().default("fixed"),
+  /** Betrag je Zeitraum in Cent; bei „variable“ nur ein Richtwert oder leer. */
+  amountCents: integer("amount_cents"),
+  interval: recurringInterval("interval").notNull(),
+  supplier: text("supplier"),
+  allocationKeyId: integer("allocation_key_id")
+    .notNull()
+    .references(() => allocationKeys.id, { onDelete: "restrict" }),
+  notes: text("notes"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt,
+  updatedAt,
+});
+
+/** TOP-Zuordnung einer Vorlage – wird in die erzeugten Kostenpositionen übernommen. */
+export const recurringCostUnits = pgTable(
+  "recurring_cost_units",
+  {
+    recurringCostId: integer("recurring_cost_id")
+      .notNull()
+      .references(() => recurringCosts.id, { onDelete: "cascade" }),
+    unitId: integer("unit_id")
+      .notNull()
+      .references(() => units.id, { onDelete: "restrict" }),
+  },
+  (t) => [primaryKey({ columns: [t.recurringCostId, t.unitId] })],
+);
+
 export const costs = pgTable(
   "costs",
   {
@@ -234,12 +279,22 @@ export const costs = pgTable(
       .notNull()
       .references(() => allocationKeys.id, { onDelete: "restrict" }),
     notes: text("notes"),
+    /**
+     * Vorlage, aus der die Position erzeugt wurde. Nur ein Herkunftsvermerk: die Position
+     * bleibt unabhängig, und wird die Vorlage gelöscht, bleibt sie bestehen.
+     */
+    recurringCostId: integer("recurring_cost_id").references(() => recurringCosts.id, {
+      onDelete: "set null",
+    }),
     createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
     ...reviewColumns(),
     createdAt,
     updatedAt,
   },
-  (t) => [index("costs_period_idx").on(t.periodId)],
+  (t) => [
+    index("costs_period_idx").on(t.periodId),
+    index("costs_recurring_idx").on(t.recurringCostId),
+  ],
 );
 
 /** TOP-Zuordnung: auf welche Einheiten eine Kostenposition umgelegt wird. */
@@ -381,6 +436,43 @@ export const documentLinks = pgTable(
     index("document_links_payment_idx").on(t.paymentId),
     // Genau ein Ziel je Verknüpfung.
     check("document_links_one_target", sql`num_nonnulls(${t.costId}, ${t.paymentId}) = 1`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Audit-Log
+// ---------------------------------------------------------------------------
+
+/**
+ * Protokoll aller relevanten Aktionen. Es wird nur angehängt: die Anwendung kennt keine
+ * Funktion zum Ändern oder Löschen, und ein Trigger (Migration 0007) weist UPDATE, DELETE
+ * und TRUNCATE auch auf Datenbankebene ab.
+ */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: serial("id").primaryKey(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * users.id – bewusst ohne Fremdschlüssel: das Löschen eines Benutzers darf das Protokoll
+     * nicht verändern. Benutzername und TOP stehen deshalb als Momentaufnahme daneben.
+     */
+    actorId: integer("actor_id"),
+    actorName: text("actor_name"),
+    actorUnit: text("actor_unit"),
+    /** Schlüssel aus AUDIT_ACTIONS (src/lib/audit.ts), z. B. „cost.updated“. */
+    action: text("action").notNull(),
+    /** Betroffener Datensatz – die ID bleibt stehen, auch wenn er später gelöscht wird. */
+    entityType: text("entity_type"),
+    entityId: integer("entity_id"),
+    /** Lesbare Bezeichnung des Datensatzes zum Zeitpunkt der Aktion. */
+    summary: text("summary").notNull(),
+    /** Optional: vorherige/neue Werte, übernommene Werte oder ein Hinweis (AuditDetails). */
+    details: jsonb("details"),
+  },
+  (t) => [
+    index("audit_log_occurred_idx").on(t.occurredAt),
+    index("audit_log_entity_idx").on(t.entityType, t.entityId),
   ],
 );
 

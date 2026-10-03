@@ -23,6 +23,8 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
         !reviews &&
         canAny(user, ["period:submit", "cost:submit", "payment:submit", "document:submit"])
       }
+      // Vorlagen sind nur für jene nützlich, die daraus Kosten anlegen oder einreichen können.
+      recurring={can(user, "recurring:read") && canAny(user, ["cost:write", "cost:submit"])}
       logoutAction={logoutAction}
     >
       {children}

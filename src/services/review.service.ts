@@ -16,10 +16,12 @@ import {
 } from "@/db/schema";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import { formatDate } from "@/lib/format";
-import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
+import { DOCUMENT_TYPE_LABELS, REVIEW_STATUS_LABELS } from "@/lib/labels";
 import type { SessionUser } from "@/types/auth";
 import type { DocumentRef, ReviewStatus } from "@/types/billing";
 
+import { describeCost, describeDocument, describePayment } from "./audit-snapshots";
+import { recordAudit } from "./audit.service";
 import { getDocumentRefs } from "./documents.service";
 
 export type ReviewKind = "period" | "cost" | "payment" | "document";
@@ -205,6 +207,43 @@ export async function countPendingReviews(actor: SessionUser): Promise<number> {
   return counts.reduce((total, [{ n }]) => total + n, 0);
 }
 
+const KIND_LABELS: Record<ReviewKind, string> = {
+  period: "Abrechnungsjahr",
+  cost: "Kostenposition",
+  payment: "Einzahlung",
+  document: "Dokument",
+};
+
+/** Bezeichnung und bisheriger Prüfstand eines Eintrags – fürs Audit-Log. */
+async function describeReviewed(
+  kind: ReviewKind,
+  id: number,
+): Promise<{ summary: string; status: ReviewStatus } | null> {
+  const db = getDb();
+  if (kind === "period") {
+    const [row] = await db
+      .select({ year: billingPeriods.year, status: billingPeriods.reviewStatus })
+      .from(billingPeriods)
+      .where(eq(billingPeriods.id, id))
+      .limit(1);
+    return row ? { summary: `Abrechnungsjahr ${row.year}`, status: row.status } : null;
+  }
+
+  const table = kind === "cost" ? costs : kind === "payment" ? payments : documents;
+  const [row] = await db
+    .select({ status: table.reviewStatus })
+    .from(table)
+    .where(eq(table.id, id))
+    .limit(1);
+  const described =
+    kind === "cost"
+      ? await describeCost(db, id)
+      : kind === "payment"
+        ? await describePayment(db, id)
+        : await describeDocument(db, id);
+  return row && described ? { summary: described.summary, status: row.status } : null;
+}
+
 /**
  * Gibt einen eingereichten Eintrag frei oder lehnt ihn ab. Prüfstand, Prüfdatum, Prüfer und
  * der optionale Kommentar werden am Eintrag gespeichert; der Einreicher sieht Stand und Kommentar.
@@ -225,6 +264,9 @@ export async function reviewEntry(
     reviewComment: comment,
   };
 
+  const before = await describeReviewed(kind, id);
+  let attachments = 0;
+
   if (kind === "cost") {
     const [row] = await db
       .select({ year: billingPeriods.year, status: billingPeriods.status })
@@ -240,34 +282,62 @@ export async function reviewEntry(
       );
     }
     await db.update(costs).set(verdict).where(eq(costs.id, id));
-    if (decision === "approved") await approveAttachments("cost", id, verdict);
-    return;
+    if (decision === "approved") attachments = await approveAttachments("cost", id, verdict);
+  } else {
+    const table = kind === "payment" ? payments : kind === "document" ? documents : billingPeriods;
+    const [updated] = await db.update(table).set(verdict).where(eq(table.id, id)).returning({ id: table.id });
+    if (!updated) throw new NotFoundError("Der Eintrag wurde nicht gefunden.");
+    if (kind === "payment" && decision === "approved") {
+      attachments = await approveAttachments("payment", id, verdict);
+    }
   }
 
-  const table = kind === "payment" ? payments : kind === "document" ? documents : billingPeriods;
-  const [updated] = await db.update(table).set(verdict).where(eq(table.id, id)).returning({ id: table.id });
-  if (!updated) throw new NotFoundError("Der Eintrag wurde nicht gefunden.");
-  if (kind === "payment" && decision === "approved") await approveAttachments("payment", id, verdict);
+  if (before) {
+    await recordAudit(actor, {
+      action: decision === "approved" ? "review.approved" : "review.rejected",
+      entity: { type: kind, id },
+      summary: `${KIND_LABELS[kind]}: ${before.summary}`,
+      details: {
+        changes: [
+          {
+            field: "Prüfstand",
+            from: REVIEW_STATUS_LABELS[before.status],
+            to: REVIEW_STATUS_LABELS[decision],
+          },
+        ],
+        note:
+          [
+            comment ? `Kommentar: ${comment}` : null,
+            attachments > 0
+              ? `${attachments === 1 ? "1 Beleg" : `${attachments} Belege`} mit freigegeben.`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined,
+      },
+    });
+  }
 }
 
 /**
  * Mit einer Kostenposition bzw. Einzahlung werden auch ihre noch ungeprüften Belege
  * freigegeben – wer den Eintrag anhand des Belegs geprüft hat, muss ihn nicht zweimal bestätigen.
  * Abgelehnte Belege bleiben abgelehnt; eine Ablehnung des Eintrags lässt die Belege unberührt.
+ * Gibt zurück, wie viele Belege dabei freigegeben wurden.
  */
 async function approveAttachments(
   target: "cost" | "payment",
   id: number,
   verdict: { reviewStatus: ReviewStatus; reviewedAt: Date; reviewedBy: number; reviewComment: string | null },
-): Promise<void> {
+): Promise<number> {
   const db = getDb();
   const linked = await db
     .select({ documentId: documentLinks.documentId })
     .from(documentLinks)
     .where(eq(target === "cost" ? documentLinks.costId : documentLinks.paymentId, id));
-  if (linked.length === 0) return;
+  if (linked.length === 0) return 0;
 
-  await db
+  const approved = await db
     .update(documents)
     .set({ ...verdict, reviewComment: null })
     .where(
@@ -278,7 +348,9 @@ async function approveAttachments(
         ),
         eq(documents.reviewStatus, "pending"),
       ),
-    );
+    )
+    .returning({ id: documents.id });
+  return approved.length;
 }
 
 /** Wie viele eigene Einträge eines Benutzers auf Prüfung warten bzw. abgelehnt wurden. */

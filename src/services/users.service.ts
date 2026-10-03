@@ -3,14 +3,18 @@ import "server-only";
 import { and, asc, count, eq, ne } from "drizzle-orm";
 
 import { generatePassword, hashPassword } from "@/auth/password";
-import { isPermission, ROLE_KEYS, type Permission } from "@/auth/permissions";
+import { isPermission, PERMISSIONS, ROLE_KEYS, type Permission } from "@/auth/permissions";
 import { authorize } from "@/auth/rbac";
 import { destroyUserSessions } from "@/auth/session";
 import { getDb, type DbExecutor } from "@/db/client";
 import { rolePermissions, roles, sessions, units, users } from "@/db/schema";
+import { diffSnapshots, snapshotValues } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { UserCreateInput, UserUpdateInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
+
+import { describeUser } from "./audit-snapshots";
+import { recordAudit } from "./audit.service";
 
 export interface UserDto {
   id: number;
@@ -104,15 +108,32 @@ export async function createUser(actor: SessionUser, input: UserCreateInput): Pr
       .limit(1);
     if (existing) throw new DomainError("Dieser Benutzername ist bereits vergeben.");
 
-    await tx.insert(users).values({
-      username: input.username,
-      displayName: input.displayName,
-      roleId: input.roleId,
-      unitId: input.unitId,
-      passwordHash,
-      // Das Initialpasswort kennt die Verwaltung – beim ersten Login wird es ersetzt.
-      mustChangePassword: true,
-    });
+    const [row] = await tx
+      .insert(users)
+      .values({
+        username: input.username,
+        displayName: input.displayName,
+        roleId: input.roleId,
+        unitId: input.unitId,
+        passwordHash,
+        // Das Initialpasswort kennt die Verwaltung – beim ersten Login wird es ersetzt.
+        mustChangePassword: true,
+      })
+      .returning({ id: users.id });
+
+    const created = await describeUser(tx, row.id);
+    if (created) {
+      await recordAudit(
+        actor,
+        {
+          action: "user.created",
+          entity: { type: "user", id: row.id },
+          summary: created.summary,
+          details: { values: snapshotValues(created.snapshot) },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -125,6 +146,7 @@ export async function updateUser(
 
   await getDb().transaction(async (tx) => {
     await assertRoleAndUnit(tx, input.roleId, input.unitId);
+    const before = await describeUser(tx, userId);
     const [row] = await tx
       .update(users)
       .set({
@@ -140,6 +162,20 @@ export async function updateUser(
     // Deaktivierte Benutzer verlieren sofort ihre Sitzungen.
     if (!input.isActive) await tx.delete(sessions).where(eq(sessions.userId, userId));
     await assertUserManagerRemains(tx);
+
+    const after = await describeUser(tx, userId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "user.updated",
+          entity: { type: "user", id: userId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot) },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -157,10 +193,16 @@ export async function resetUserPassword(actor: SessionUser, userId: number): Pro
       lockedUntil: null,
     })
     .where(eq(users.id, userId))
-    .returning({ id: users.id });
+    .returning({ id: users.id, username: users.username });
   if (!row) throw new NotFoundError("Der Benutzer wurde nicht gefunden.");
 
   await destroyUserSessions(userId);
+  await recordAudit(actor, {
+    action: "user.password_reset",
+    entity: { type: "user", id: userId },
+    summary: `Benutzer ${row.username}`,
+    details: { note: "Neues Initialpasswort gesetzt – alle Sitzungen des Benutzers beendet." },
+  });
   return password;
 }
 
@@ -169,9 +211,23 @@ export async function deleteUser(actor: SessionUser, userId: number): Promise<vo
   if (userId === actor.id) throw new DomainError("Du kannst dein eigenes Konto nicht löschen.");
 
   await getDb().transaction(async (tx) => {
+    const deleted = await describeUser(tx, userId);
     const [row] = await tx.delete(users).where(eq(users.id, userId)).returning({ id: users.id });
     if (!row) throw new NotFoundError("Der Benutzer wurde nicht gefunden.");
     await assertUserManagerRemains(tx);
+
+    if (deleted) {
+      await recordAudit(
+        actor,
+        {
+          action: "user.deleted",
+          entity: { type: "user", id: userId },
+          summary: deleted.summary,
+          details: { values: snapshotValues(deleted.snapshot) },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -218,11 +274,37 @@ export async function updateRolePermissions(
       throw new DomainError("Die Administrator-Rolle hat immer alle Rechte.");
     }
 
+    const previous = await tx
+      .select({ permission: rolePermissions.permission })
+      .from(rolePermissions)
+      .where(eq(rolePermissions.roleId, roleId));
+    const before = new Set(previous.map((row) => row.permission).filter(isPermission));
+
     await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
     if (valid.length > 0) {
       await tx.insert(rolePermissions).values(valid.map((permission) => ({ roleId, permission })));
     }
     await assertUserManagerRemains(tx);
+
+    const granted = valid.filter((permission) => !before.has(permission));
+    const revoked = [...before].filter((permission) => !valid.includes(permission));
+    if (granted.length + revoked.length > 0) {
+      await recordAudit(
+        actor,
+        {
+          action: "role.permissions_updated",
+          entity: { type: "role", id: roleId },
+          summary: `Rolle ${role.name}`,
+          details: {
+            changes: [
+              ...granted.map((permission) => ({ field: PERMISSIONS[permission], from: "Nein", to: "Ja" })),
+              ...revoked.map((permission) => ({ field: PERMISSIONS[permission], from: "Ja", to: "Nein" })),
+            ],
+          },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -243,7 +325,18 @@ export async function createRole(
   const [existing] = await db.select({ id: roles.id }).from(roles).where(eq(roles.key, key)).limit(1);
   if (existing) throw new DomainError("Eine Rolle mit diesem Namen gibt es bereits.");
 
-  await db.insert(roles).values({ key, name: input.name, description: input.description });
+  const [row] = await db
+    .insert(roles)
+    .values({ key, name: input.name, description: input.description })
+    .returning({ id: roles.id });
+  await recordAudit(actor, {
+    action: "role.created",
+    entity: { type: "role", id: row.id },
+    summary: `Rolle ${input.name}`,
+    details: input.description
+      ? { values: [{ field: "Beschreibung", value: input.description }] }
+      : undefined,
+  });
 }
 
 export async function deleteRole(actor: SessionUser, roleId: number): Promise<void> {
@@ -257,4 +350,9 @@ export async function deleteRole(actor: SessionUser, roleId: number): Promise<vo
   if (n > 0) throw new DomainError(`Die Rolle ist noch ${n} Benutzer(n) zugewiesen.`);
 
   await db.delete(roles).where(and(eq(roles.id, roleId), ne(roles.isSystem, true)));
+  await recordAudit(actor, {
+    action: "role.deleted",
+    entity: { type: "role", id: roleId },
+    summary: `Rolle ${role.name}`,
+  });
 }

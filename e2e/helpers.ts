@@ -1,3 +1,5 @@
+import { inflateSync } from "node:zlib";
+
 import { expect, type Locator, type Page } from "@playwright/test";
 
 export type SeedUser = "top1" | "top2" | "top3";
@@ -57,6 +59,34 @@ export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 export async function expectAbove(upper: Locator, lower: Locator): Promise<void> {
   const [a, b] = await Promise.all([upper.boundingBox(), lower.boundingBox()]);
   expect(a && b && a.y + a.height <= b.y, "Reihenfolge im Formular").toBe(true);
+}
+
+/**
+ * Text eines von der App erzeugten PDFs: entpackt die Seiteninhalte und liest die gezeichneten
+ * Zeichenketten. Reicht, um zu prüfen, was in einer Abrechnung steht – und was nicht.
+ */
+export function pdfText(pdf: Buffer): string {
+  const parts: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const keyword = pdf.indexOf("stream", offset);
+    if (keyword === -1) break;
+    let start = keyword + "stream".length;
+    if (pdf[start] === 0x0d) start++;
+    if (pdf[start] === 0x0a) start++;
+    const end = pdf.indexOf("endstream", start);
+    if (end === -1) break;
+    try {
+      const content = inflateSync(pdf.subarray(start, end)).toString("latin1");
+      for (const match of content.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) {
+        parts.push(Buffer.from(match[1], "hex").toString("latin1"));
+      }
+    } catch {
+      // Kein gepackter Seiteninhalt (z. B. eine Schrift) – überspringen.
+    }
+    offset = end + "endstream".length;
+  }
+  return parts.join("\n");
 }
 
 export const CURRENT_YEAR = new Date().getFullYear();

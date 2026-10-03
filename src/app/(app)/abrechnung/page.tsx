@@ -5,6 +5,7 @@ import Link from "next/link";
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
 import { AddButton } from "@/components/add/add-button";
+import { AnnualStatementButton } from "@/components/billing/annual-statement-button";
 import { BalanceBadge } from "@/components/billing/balance-badge";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -12,6 +13,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { formatCents } from "@/lib/format";
+import { listUnits } from "@/services/masterdata.service";
 import { getYearOverview, type YearSummary } from "@/services/overview.service";
 
 export const metadata: Metadata = { title: "Abrechnung" };
@@ -21,8 +23,9 @@ export default async function BillingIndexPage() {
   const user = await requireUser();
   if (!can(user, "period:read") || !can(user, "cost:read")) return <NoAccess />;
 
-  const years = await getYearOverview(user);
   const own = !getDataScope(user).allUnits;
+  // Die Verwaltung kann die Jahresabrechnung auch je TOP erstellen.
+  const [years, units] = await Promise.all([getYearOverview(user), own ? [] : listUnits(user)]);
   const canCreate = can(user, "period:write");
 
   const yearLink = (summary: YearSummary) => (
@@ -74,6 +77,10 @@ export default async function BillingIndexPage() {
             : "Jahresübersicht über alle Abrechnungsjahre."
         }
       >
+        <AnnualStatementButton
+          years={years.map((y) => ({ year: y.period.year, released: y.period.status === "released" }))}
+          units={units.map((unit) => ({ number: unit.number, name: unit.name }))}
+        />
         <AddButton user={user} area="billing" />
       </PageHeader>
 

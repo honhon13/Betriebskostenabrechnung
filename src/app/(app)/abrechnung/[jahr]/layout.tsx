@@ -5,6 +5,7 @@ import { deletePeriodAction, setPeriodStatusAction } from "@/app/actions/billing
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
 import { AddButton } from "@/components/add/add-button";
+import { AnnualStatementButton } from "@/components/billing/annual-statement-button";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { Tabs, type TabItem } from "@/components/layout/tabs";
@@ -14,6 +15,7 @@ import { ButtonLink } from "@/components/ui/button";
 import { NoAccess } from "@/components/ui/no-access";
 import { PageHeader } from "@/components/ui/page";
 import { formatDate, formatDateTime } from "@/lib/format";
+import { listUnits } from "@/services/masterdata.service";
 import { listPeriods } from "@/services/periods.service";
 
 export default async function BillingYearLayout({
@@ -30,6 +32,8 @@ export default async function BillingYearLayout({
   if (!period) notFound();
 
   const scope = getDataScope(user);
+  // Die Verwaltung kann die Jahresabrechnung auch je TOP erstellen.
+  const units = scope.allUnits ? await listUnits(user) : [];
   const base = `/abrechnung/${period.year}`;
   const tabs: TabItem[] = [
     { href: base, label: scope.allUnits ? "Übersicht" : "Meine Abrechnung" },
@@ -67,6 +71,13 @@ export default async function BillingYearLayout({
           value={period.year}
           hrefPattern="/abrechnung/{year}"
         />
+        {can(user, "cost:read") ? (
+          <AnnualStatementButton
+            years={periods.map((p) => ({ year: p.year, released: p.status === "released" }))}
+            defaultYear={period.year}
+            units={units.map((unit) => ({ number: unit.number, name: unit.name }))}
+          />
+        ) : null}
         {can(user, "period:release") ? (
           <ConfirmAction
             trigger={

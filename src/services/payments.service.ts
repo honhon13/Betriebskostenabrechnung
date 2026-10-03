@@ -6,11 +6,14 @@ import { ForbiddenError } from "@/auth/errors";
 import { authorize, canAccessUnit, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb } from "@/db/client";
 import { billingPeriods, documentLinks, payments, units } from "@/db/schema";
+import { diffSnapshots, snapshotValues } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { PaymentInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
 import type { PaymentDto, PaymentStatus, ReviewStatus } from "@/types/billing";
 
+import { describePayment } from "./audit-snapshots";
+import { recordAudit } from "./audit.service";
 import { getDocumentRefs } from "./documents.service";
 import { getVisiblePeriod } from "./periods.service";
 
@@ -116,11 +119,28 @@ function toColumns(input: PaymentInput) {
 export async function createPayment(actor: SessionUser, input: PaymentInput): Promise<number> {
   authorize(actor, "payment:write");
   await assertWritable(actor, input);
-  const [row] = await getDb()
-    .insert(payments)
-    .values({ ...toColumns(input), createdBy: actor.id })
-    .returning({ id: payments.id });
-  return row.id;
+
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx
+      .insert(payments)
+      .values({ ...toColumns(input), createdBy: actor.id })
+      .returning({ id: payments.id });
+
+    const created = await describePayment(tx, row.id);
+    if (created) {
+      await recordAudit(
+        actor,
+        {
+          action: "payment.created",
+          entity: { type: "payment", id: row.id },
+          summary: created.summary,
+          details: { values: snapshotValues(created.snapshot) },
+        },
+        tx,
+      );
+    }
+    return row.id;
+  });
 }
 
 /** Lädt eine bestehende Einzahlung und prüft, dass sie im Sichtbereich des Benutzers liegt. */
@@ -156,11 +176,43 @@ export async function updatePayment(
     }
   }
 
-  await getDb().update(payments).set(toColumns(input)).where(eq(payments.id, paymentId));
+  await getDb().transaction(async (tx) => {
+    const before = await describePayment(tx, paymentId);
+    await tx.update(payments).set(toColumns(input)).where(eq(payments.id, paymentId));
+    const after = await describePayment(tx, paymentId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "payment.updated",
+          entity: { type: "payment", id: paymentId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot) },
+        },
+        tx,
+      );
+    }
+  });
 }
 
 export async function deletePayment(actor: SessionUser, paymentId: number): Promise<void> {
   authorize(actor, "payment:delete");
   await getAccessiblePayment(actor, paymentId);
-  await getDb().delete(payments).where(eq(payments.id, paymentId));
+
+  await getDb().transaction(async (tx) => {
+    const deleted = await describePayment(tx, paymentId);
+    await tx.delete(payments).where(eq(payments.id, paymentId));
+    if (deleted) {
+      await recordAudit(
+        actor,
+        {
+          action: "payment.deleted",
+          entity: { type: "payment", id: paymentId },
+          summary: deleted.summary,
+          details: { values: snapshotValues(deleted.snapshot) },
+        },
+        tx,
+      );
+    }
+  });
 }

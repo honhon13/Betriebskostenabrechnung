@@ -13,11 +13,14 @@ import {
   documentLinks,
   units,
 } from "@/db/schema";
+import { diffSnapshots, snapshotValues } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import type { CostInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
 import type { CostDto, OcrFields } from "@/types/billing";
 
+import { describeCost } from "./audit-snapshots";
+import { recordAudit } from "./audit.service";
 import { getDocumentRefs } from "./documents.service";
 import { assertDraft, getVisiblePeriod } from "./periods.service";
 
@@ -133,6 +136,20 @@ export async function createCost(actor: SessionUser, input: CostInput): Promise<
     await tx
       .insert(costUnits)
       .values([...new Set(input.unitIds)].map((unitId) => ({ costId: row.id, unitId })));
+
+    const created = await describeCost(tx, row.id);
+    if (created) {
+      await recordAudit(
+        actor,
+        {
+          action: "cost.created",
+          entity: { type: "cost", id: row.id },
+          summary: created.summary,
+          details: { values: snapshotValues(created.snapshot) },
+        },
+        tx,
+      );
+    }
     return row.id;
   });
 }
@@ -175,6 +192,7 @@ export async function updateCost(
 
   await getDb().transaction(async (tx) => {
     await assertReferences(tx, input);
+    const before = await describeCost(tx, costId);
     await tx
       .update(costs)
       .set({ ...toColumns(input), periodId: input.periodId })
@@ -183,6 +201,20 @@ export async function updateCost(
     await tx
       .insert(costUnits)
       .values([...new Set(input.unitIds)].map((unitId) => ({ costId, unitId })));
+
+    const after = await describeCost(tx, costId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "cost.updated",
+          entity: { type: "cost", id: costId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot) },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -190,7 +222,23 @@ export async function updateCost(
 export async function deleteCost(actor: SessionUser, costId: number): Promise<void> {
   authorizeGlobalWrite(actor, "cost:delete");
   assertDraft(await getVisiblePeriod(actor, await getCostPeriod(costId)));
-  await getDb().delete(costs).where(eq(costs.id, costId));
+
+  await getDb().transaction(async (tx) => {
+    const deleted = await describeCost(tx, costId);
+    await tx.delete(costs).where(eq(costs.id, costId));
+    if (deleted) {
+      await recordAudit(
+        actor,
+        {
+          action: "cost.deleted",
+          entity: { type: "cost", id: costId },
+          summary: deleted.summary,
+          details: { values: snapshotValues(deleted.snapshot) },
+        },
+        tx,
+      );
+    }
+  });
 }
 
 /**
@@ -240,5 +288,26 @@ export async function fillCostFromOcr(
       ? { taxAmountCents: fields.taxAmountCents }
       : {}),
   };
-  if (Object.keys(patch).length > 0) await db.update(costs).set(patch).where(eq(costs.id, costId));
+  if (Object.keys(patch).length === 0) return;
+
+  await db.transaction(async (tx) => {
+    const before = await describeCost(tx, costId);
+    await tx.update(costs).set(patch).where(eq(costs.id, costId));
+    const after = await describeCost(tx, costId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "cost.updated",
+          entity: { type: "cost", id: costId },
+          summary: after.summary,
+          details: {
+            changes: diffSnapshots(before.snapshot, after.snapshot),
+            note: "Leere Rechnungsfelder per OCR aus dem Beleg ergänzt.",
+          },
+        },
+        tx,
+      );
+    }
+  });
 }

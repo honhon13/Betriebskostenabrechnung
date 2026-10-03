@@ -11,7 +11,11 @@ import type { PeriodInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
 import type { PeriodDto, PeriodStatus } from "@/types/billing";
 
+import { recordAudit } from "./audit.service";
+
 type PeriodRow = typeof billingPeriods.$inferSelect;
+
+const STATUS_LABELS: Record<PeriodStatus, string> = { draft: "Entwurf", released: "Freigegeben" };
 
 function toDto(row: PeriodRow): PeriodDto {
   return {
@@ -119,6 +123,16 @@ export async function createPeriod(actor: SessionUser, input: PeriodInput): Prom
       .returning();
 
     await seedAllocationValues(tx, row.id, { overwrite: false });
+    await recordAudit(
+      actor,
+      {
+        action: "period.created",
+        entity: { type: "period", id: row.id },
+        summary: `Abrechnungsjahr ${row.year}`,
+        details: row.notes ? { values: [{ field: "Notiz", value: row.notes }] } : undefined,
+      },
+      tx,
+    );
     return toDto(row);
   });
 }
@@ -136,15 +150,32 @@ export async function setPeriodStatus(
     );
   }
 
-  const [row] = await getDb()
-    .update(billingPeriods)
-    .set(
-      status === "released"
-        ? { status, releasedAt: new Date(), releasedBy: actor.id }
-        : { status, releasedAt: null, releasedBy: null },
-    )
-    .where(eq(billingPeriods.id, periodId))
-    .returning();
+  const row = await getDb().transaction(async (tx) => {
+    const [updated] = await tx
+      .update(billingPeriods)
+      .set(
+        status === "released"
+          ? { status, releasedAt: new Date(), releasedBy: actor.id }
+          : { status, releasedAt: null, releasedBy: null },
+      )
+      .where(eq(billingPeriods.id, periodId))
+      .returning();
+    if (period.status !== status) {
+      await recordAudit(
+        actor,
+        {
+          action: status === "released" ? "period.released" : "period.reopened",
+          entity: { type: "period", id: periodId },
+          summary: `Abrechnung ${period.year}`,
+          details: {
+            changes: [{ field: "Status", from: STATUS_LABELS[period.status], to: STATUS_LABELS[status] }],
+          },
+        },
+        tx,
+      );
+    }
+    return updated;
+  });
   return toDto(row);
 }
 
@@ -167,7 +198,19 @@ export async function deletePeriod(actor: SessionUser, periodId: number): Promis
     );
   }
 
-  await db.delete(billingPeriods).where(eq(billingPeriods.id, periodId));
+  await db.transaction(async (tx) => {
+    await tx.delete(billingPeriods).where(eq(billingPeriods.id, periodId));
+    await recordAudit(
+      actor,
+      {
+        action: "period.deleted",
+        entity: { type: "period", id: periodId },
+        summary: `Abrechnungsjahr ${period.year}`,
+        details: { values: [{ field: "Status", value: STATUS_LABELS[period.status] }] },
+      },
+      tx,
+    );
+  });
 }
 
 /**

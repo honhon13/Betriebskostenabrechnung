@@ -18,6 +18,7 @@ import {
   payments,
   units,
 } from "@/db/schema";
+import { diffSnapshots, snapshotValues } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import { sanitizeFileName } from "@/lib/files";
 import { formatCents, formatDate } from "@/lib/format";
@@ -30,6 +31,8 @@ import type {
 import type { SessionUser } from "@/types/auth";
 import type { DocumentDto, DocumentRef, PeriodDto, PeriodStatus, ReviewInfo } from "@/types/billing";
 
+import { describeCost, describeDocument, describePayment } from "./audit-snapshots";
+import { recordAudit } from "./audit.service";
 import {
   checkUpload,
   getDocumentRefs,
@@ -51,6 +54,9 @@ const PENDING = {
   reviewedBy: null,
   reviewComment: null,
 } as const;
+
+/** Hinweis im Audit-Log, wenn ein Benutzer einen eigenen Eintrag ändert. */
+const RESUBMITTED = "Vom Einreicher geändert – wartet erneut auf Prüfung.";
 
 function review(row: {
   reviewStatus: ReviewInfo["reviewStatus"];
@@ -92,6 +98,16 @@ export async function submitPeriod(actor: SessionUser, input: PeriodInput): Prom
       })
       .returning();
     await seedAllocationValues(tx, row.id, { overwrite: false });
+    await recordAudit(
+      actor,
+      {
+        action: "period.submitted",
+        entity: { type: "period", id: row.id },
+        summary: `Abrechnungsjahr ${row.year}`,
+        details: row.notes ? { values: [{ field: "Notiz", value: row.notes }] } : undefined,
+      },
+      tx,
+    );
     return toPeriodDto(row);
   });
 }
@@ -157,6 +173,20 @@ export async function submitCost(actor: SessionUser, input: CostSubmissionInput)
 
     const unitRows = await tx.select({ id: units.id }).from(units);
     await tx.insert(costUnits).values(unitRows.map((unit) => ({ costId: row.id, unitId: unit.id })));
+
+    const submitted = await describeCost(tx, row.id);
+    if (submitted) {
+      await recordAudit(
+        actor,
+        {
+          action: "cost.submitted",
+          entity: { type: "cost", id: row.id },
+          summary: submitted.summary,
+          details: { values: snapshotValues(submitted.snapshot) },
+        },
+        tx,
+      );
+    }
     return row.id;
   });
 }
@@ -179,10 +209,25 @@ export async function updateOwnCost(
 
   await db.transaction(async (tx) => {
     await assertActiveCategory(tx, input.categoryId);
+    const before = await describeCost(tx, costId);
     await tx
       .update(costs)
       .set({ ...costColumns(input), ...PENDING })
       .where(eq(costs.id, costId));
+
+    const after = await describeCost(tx, costId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "cost.updated",
+          entity: { type: "cost", id: costId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot), note: RESUBMITTED },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -215,17 +260,33 @@ export async function submitPayment(
   const unitId = requireOwnUnit(actor);
   await getSubmittablePeriod(actor, input.periodId);
 
-  const [row] = await getDb()
-    .insert(payments)
-    .values({
-      ...paymentColumns(input),
-      periodId: input.periodId,
-      unitId,
-      createdBy: actor.id,
-      ...PENDING,
-    })
-    .returning({ id: payments.id });
-  return row.id;
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx
+      .insert(payments)
+      .values({
+        ...paymentColumns(input),
+        periodId: input.periodId,
+        unitId,
+        createdBy: actor.id,
+        ...PENDING,
+      })
+      .returning({ id: payments.id });
+
+    const submitted = await describePayment(tx, row.id);
+    if (submitted) {
+      await recordAudit(
+        actor,
+        {
+          action: "payment.submitted",
+          entity: { type: "payment", id: row.id },
+          summary: submitted.summary,
+          details: { values: snapshotValues(submitted.snapshot) },
+        },
+        tx,
+      );
+    }
+    return row.id;
+  });
 }
 
 /** Ändert eine selbst eingereichte Einzahlung – sie muss danach erneut geprüft werden. */
@@ -241,10 +302,27 @@ export async function updateOwnPayment(
     throw new NotFoundError("Die Einzahlung wurde nicht gefunden.");
   }
 
-  await db
-    .update(payments)
-    .set({ ...paymentColumns(input), ...PENDING })
-    .where(eq(payments.id, paymentId));
+  await db.transaction(async (tx) => {
+    const before = await describePayment(tx, paymentId);
+    await tx
+      .update(payments)
+      .set({ ...paymentColumns(input), ...PENDING })
+      .where(eq(payments.id, paymentId));
+
+    const after = await describePayment(tx, paymentId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "payment.updated",
+          entity: { type: "payment", id: paymentId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot), note: RESUBMITTED },
+        },
+        tx,
+      );
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +422,20 @@ export async function submitDocument(
       .returning({ id: documents.id });
     await tx.insert(documentFiles).values({ documentId: row.id, content: file.bytes });
     await replaceOwnLinks(tx, row.id, meta);
+
+    const submitted = await describeDocument(tx, row.id);
+    if (submitted) {
+      await recordAudit(
+        actor,
+        {
+          action: "document.submitted",
+          entity: { type: "document", id: row.id },
+          summary: submitted.summary,
+          details: { values: snapshotValues(submitted.snapshot) },
+        },
+        tx,
+      );
+    }
     return row.id;
   });
 }
@@ -363,11 +455,26 @@ export async function updateOwnDocument(
 
   await db.transaction(async (tx) => {
     await assertOwnTargets(tx, actor, document.periodId, meta);
+    const before = await describeDocument(tx, documentId);
     await tx
       .update(documents)
       .set({ ...documentColumns(meta), ...PENDING })
       .where(eq(documents.id, documentId));
     await replaceOwnLinks(tx, documentId, meta);
+
+    const after = await describeDocument(tx, documentId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "document.updated",
+          entity: { type: "document", id: documentId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot), note: RESUBMITTED },
+        },
+        tx,
+      );
+    }
   });
 }
 

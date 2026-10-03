@@ -5,10 +5,49 @@ import { asc, count, eq, max } from "drizzle-orm";
 import { authorizeGlobalWrite, getDataScope } from "@/auth/rbac";
 import { getDb } from "@/db/client";
 import { allocationKeys, costCategories, costs, units } from "@/db/schema";
+import { diffSnapshots, snapshotValues, type AuditSnapshot } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
+import { formatNumber } from "@/lib/format";
 import type { AllocationKeyInput, CategoryInput, UnitInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
 import type { AllocationKeyDto, CategoryDto, UnitDto } from "@/types/billing";
+
+import { recordAudit } from "./audit.service";
+
+// Anzeigewerte fürs Audit-Log.
+const yesNo = (value: boolean) => (value ? "Ja" : "Nein");
+
+function unitSnapshot(row: typeof units.$inferSelect): AuditSnapshot {
+  return {
+    Name: row.name,
+    Wohnfläche: row.areaSqm === null ? null : `${formatNumber(Number(row.areaSqm))} m²`,
+    Personen: row.persons === null ? null : String(row.persons),
+    Notiz: row.notes,
+  };
+}
+
+function keySnapshot(row: typeof allocationKeys.$inferSelect): AuditSnapshot {
+  return {
+    Name: row.name,
+    Einheit: row.unitLabel || null,
+    Beschreibung: row.description,
+    Aktiv: yesNo(row.isActive),
+  };
+}
+
+function categorySnapshot(
+  row: typeof costCategories.$inferSelect,
+  keys: { id: number; name: string }[],
+): AuditSnapshot {
+  return {
+    Name: row.name,
+    Beschreibung: row.description,
+    "Standard-Umlageschlüssel": keys.find((key) => key.id === row.defaultAllocationKeyId)?.name ?? null,
+    Aktiv: yesNo(row.isActive),
+  };
+}
+
+const keyNames = () => getDb().select({ id: allocationKeys.id, name: allocationKeys.name }).from(allocationKeys);
 
 // ---------------------------------------------------------------------------
 // Wohneinheiten
@@ -38,7 +77,9 @@ export async function updateUnit(
   input: UnitInput,
 ): Promise<void> {
   authorizeGlobalWrite(actor, "masterdata:write");
-  const [row] = await getDb()
+  const db = getDb();
+  const [before] = await db.select().from(units).where(eq(units.id, unitId)).limit(1);
+  const [row] = await db
     .update(units)
     .set({
       name: input.name,
@@ -47,8 +88,15 @@ export async function updateUnit(
       notes: input.notes,
     })
     .where(eq(units.id, unitId))
-    .returning({ id: units.id });
+    .returning();
   if (!row) throw new NotFoundError("Die TOP wurde nicht gefunden.");
+
+  await recordAudit(actor, {
+    action: "unit.updated",
+    entity: { type: "unit", id: unitId },
+    summary: row.name,
+    details: { changes: diffSnapshots(before ? unitSnapshot(before) : {}, unitSnapshot(row)) },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -86,14 +134,24 @@ export async function createAllocationKey(
   const db = getDb();
   const [{ last }] = await db.select({ last: max(allocationKeys.sortOrder) }).from(allocationKeys);
 
-  await db.insert(allocationKeys).values({
-    code: `custom_${Date.now().toString(36)}`,
-    name: input.name,
-    unitLabel: input.unitLabel,
-    description: input.description,
-    source: "manual",
-    isActive: input.isActive,
-    sortOrder: (last ?? 0) + 10,
+  const [row] = await db
+    .insert(allocationKeys)
+    .values({
+      code: `custom_${Date.now().toString(36)}`,
+      name: input.name,
+      unitLabel: input.unitLabel,
+      description: input.description,
+      source: "manual",
+      isActive: input.isActive,
+      sortOrder: (last ?? 0) + 10,
+    })
+    .returning();
+
+  await recordAudit(actor, {
+    action: "allocation_key.created",
+    entity: { type: "allocation_key", id: row.id },
+    summary: `Umlageschlüssel ${row.name}`,
+    details: { values: snapshotValues(keySnapshot(row)) },
   });
 }
 
@@ -103,7 +161,9 @@ export async function updateAllocationKey(
   input: AllocationKeyInput,
 ): Promise<void> {
   authorizeGlobalWrite(actor, "masterdata:write");
-  const [row] = await getDb()
+  const db = getDb();
+  const [before] = await db.select().from(allocationKeys).where(eq(allocationKeys.id, keyId)).limit(1);
+  const [row] = await db
     .update(allocationKeys)
     .set({
       name: input.name,
@@ -112,8 +172,15 @@ export async function updateAllocationKey(
       isActive: input.isActive,
     })
     .where(eq(allocationKeys.id, keyId))
-    .returning({ id: allocationKeys.id });
+    .returning();
   if (!row) throw new NotFoundError("Der Umlageschlüssel wurde nicht gefunden.");
+
+  await recordAudit(actor, {
+    action: "allocation_key.updated",
+    entity: { type: "allocation_key", id: keyId },
+    summary: `Umlageschlüssel ${row.name}`,
+    details: { changes: diffSnapshots(before ? keySnapshot(before) : {}, keySnapshot(row)) },
+  });
 }
 
 export async function deleteAllocationKey(actor: SessionUser, keyId: number): Promise<void> {
@@ -134,6 +201,12 @@ export async function deleteAllocationKey(actor: SessionUser, keyId: number): Pr
   }
 
   await db.delete(allocationKeys).where(eq(allocationKeys.id, keyId));
+  await recordAudit(actor, {
+    action: "allocation_key.deleted",
+    entity: { type: "allocation_key", id: keyId },
+    summary: `Umlageschlüssel ${key.name}`,
+    details: { values: snapshotValues(keySnapshot(key)) },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -164,12 +237,22 @@ export async function createCategory(actor: SessionUser, input: CategoryInput): 
   const db = getDb();
   const [{ last }] = await db.select({ last: max(costCategories.sortOrder) }).from(costCategories);
 
-  await db.insert(costCategories).values({
-    name: input.name,
-    description: input.description,
-    defaultAllocationKeyId: input.defaultAllocationKeyId,
-    isActive: input.isActive,
-    sortOrder: (last ?? 0) + 10,
+  const [row] = await db
+    .insert(costCategories)
+    .values({
+      name: input.name,
+      description: input.description,
+      defaultAllocationKeyId: input.defaultAllocationKeyId,
+      isActive: input.isActive,
+      sortOrder: (last ?? 0) + 10,
+    })
+    .returning();
+
+  await recordAudit(actor, {
+    action: "category.created",
+    entity: { type: "category", id: row.id },
+    summary: `Kostenart ${row.name}`,
+    details: { values: snapshotValues(categorySnapshot(row, await keyNames())) },
   });
 }
 
@@ -179,7 +262,13 @@ export async function updateCategory(
   input: CategoryInput,
 ): Promise<void> {
   authorizeGlobalWrite(actor, "masterdata:write");
-  const [row] = await getDb()
+  const db = getDb();
+  const [before] = await db
+    .select()
+    .from(costCategories)
+    .where(eq(costCategories.id, categoryId))
+    .limit(1);
+  const [row] = await db
     .update(costCategories)
     .set({
       name: input.name,
@@ -188,8 +277,18 @@ export async function updateCategory(
       isActive: input.isActive,
     })
     .where(eq(costCategories.id, categoryId))
-    .returning({ id: costCategories.id });
+    .returning();
   if (!row) throw new NotFoundError("Die Kostenart wurde nicht gefunden.");
+
+  const keys = await keyNames();
+  await recordAudit(actor, {
+    action: "category.updated",
+    entity: { type: "category", id: categoryId },
+    summary: `Kostenart ${row.name}`,
+    details: {
+      changes: diffSnapshots(before ? categorySnapshot(before, keys) : {}, categorySnapshot(row, keys)),
+    },
+  });
 }
 
 export async function deleteCategory(actor: SessionUser, categoryId: number): Promise<void> {
@@ -208,6 +307,13 @@ export async function deleteCategory(actor: SessionUser, categoryId: number): Pr
   const [row] = await db
     .delete(costCategories)
     .where(eq(costCategories.id, categoryId))
-    .returning({ id: costCategories.id });
+    .returning();
   if (!row) throw new NotFoundError("Die Kostenart wurde nicht gefunden.");
+
+  await recordAudit(actor, {
+    action: "category.deleted",
+    entity: { type: "category", id: categoryId },
+    summary: `Kostenart ${row.name}`,
+    details: { values: snapshotValues(categorySnapshot(row, await keyNames())) },
+  });
 }

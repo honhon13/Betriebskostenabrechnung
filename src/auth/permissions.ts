@@ -31,8 +31,13 @@ export const PERMISSIONS = {
   "document:submit": "Dokumente zur Prüfung einreichen",
   "review:manage": "Eingereichte Einträge prüfen, freigeben und ablehnen",
 
+  "recurring:read": "Vorlagen für wiederkehrende Kosten ansehen und verwenden",
+  "recurring:write": "Vorlagen für wiederkehrende Kosten anlegen und bearbeiten",
+  "recurring:delete": "Vorlagen für wiederkehrende Kosten löschen",
+
   "masterdata:write": "Stammdaten pflegen (TOPs, Kostenarten, Umlageschlüssel)",
   "user:manage": "Benutzer und Rollen verwalten",
+  "audit:read": "Audit-Log einsehen",
 
   // Datenumfang: ohne diese Rechte gilt „nur eigene TOP“ bzw. „nur freigegeben“.
   "scope:all_units": "Daten aller TOPs sehen",
@@ -79,6 +84,7 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "cost:submit",
       "payment:submit",
       "document:submit",
+      "recurring:read",
     ],
   },
 ];

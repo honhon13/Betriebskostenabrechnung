@@ -24,7 +24,14 @@ import { getVisiblePeriod } from "./periods.service";
  * Abrechnung eines Jahres. Gerechnet wird immer über alle TOPs; ohne scope:all_units
  * bekommt der Aufrufer nur die Positionen und den Anteil seiner eigenen TOP zurück.
  */
-export async function getStatement(actor: SessionUser, periodId: number): Promise<Statement> {
+export async function getStatement(
+  actor: SessionUser,
+  periodId: number,
+  options: {
+    /** Auch wer prüft, bekommt nur freigegebene Belege – für die Jahresabrechnung als PDF. */
+    approvedDocumentsOnly?: boolean;
+  } = {},
+): Promise<Statement> {
   authorize(actor, "cost:read");
   await getVisiblePeriod(actor, periodId);
 
@@ -69,7 +76,9 @@ export async function getStatement(actor: SessionUser, periodId: number): Promis
       ? []
       : db.select().from(costUnits).where(inArray(costUnits.costId, costIds)),
     // Wer nicht prüft, sieht an den Positionen nur freigegebene Dokumente.
-    getDocumentRefs("cost", costIds, { approvedOnly: !seesUnreviewed(actor) }),
+    getDocumentRefs("cost", costIds, {
+      approvedOnly: options.approvedDocumentsOnly || !seesUnreviewed(actor),
+    }),
   ]);
 
   const statement = buildStatement({

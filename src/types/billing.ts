@@ -5,6 +5,9 @@ export type DocumentType = "invoice" | "payment_proof" | "contract" | "other";
 export type PaymentStatus = "received" | "pending" | "cancelled";
 /** pending = ausstehende Prüfung, approved = freigegeben, rejected = abgelehnt. */
 export type ReviewStatus = "pending" | "approved" | "rejected";
+/** fixed = fester Betrag je Zeitraum, variable = der Betrag wird beim Erzeugen eingegeben. */
+export type RecurringAmountType = "fixed" | "variable";
+export type RecurringInterval = "monthly" | "quarterly" | "yearly";
 
 /** Prüfstand eines Eintrags. Nur „approved“ zählt offiziell. */
 export interface ReviewInfo {
@@ -89,6 +92,30 @@ export interface CostDto extends ReviewInfo {
   unitIds: number[];
   documents: DocumentRef[];
   createdAt: string;
+}
+
+/** Vorlage für wiederkehrende Kosten. */
+export interface RecurringCostDto {
+  id: number;
+  categoryId: number;
+  categoryName: string;
+  /** Beschreibung der erzeugten Kostenpositionen – der Zeitraum wird angehängt. */
+  description: string;
+  amountType: RecurringAmountType;
+  /** Betrag je Zeitraum; bei „variable“ ein Richtwert oder null. */
+  amountCents: number | null;
+  interval: RecurringInterval;
+  supplier: string | null;
+  allocationKeyId: number;
+  allocationKeyName: string;
+  unitIds: number[];
+  notes: string | null;
+  isActive: boolean;
+  /**
+   * Je Abrechnungsjahr (periodId) der Beginn der Zeiträume, für die es aus dieser Vorlage
+   * schon eine Kostenposition gibt – abgelehnte Einreichungen zählen nicht.
+   */
+  generated: Record<number, string[]>;
 }
 
 export interface PaymentDto extends ReviewInfo {

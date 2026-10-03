@@ -14,6 +14,7 @@ export default async function SettingsLayout({ children }: LayoutProps<"/einstel
     ...(can(user, "user:manage")
       ? [{ href: "/einstellungen/benutzer", label: "Benutzer & Rollen" }]
       : []),
+    ...(can(user, "audit:read") ? [{ href: "/einstellungen/protokoll", label: "Audit-Log" }] : []),
   ];
 
   return (

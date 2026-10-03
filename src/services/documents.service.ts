@@ -17,6 +17,7 @@ import {
   payments,
   units,
 } from "@/db/schema";
+import { diffSnapshots, snapshotValues, type AuditSnapshot } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import {
   ALLOWED_FILE_TYPES,
@@ -36,6 +37,8 @@ import type {
   OcrOutcome,
 } from "@/types/billing";
 
+import { describeDocument } from "./audit-snapshots";
+import { recordAudit } from "./audit.service";
 import { getOcrService, OcrError, type OcrResult } from "./ocr";
 import { getVisiblePeriod } from "./periods.service";
 
@@ -553,6 +556,20 @@ export async function uploadDocument(
       .returning({ id: documents.id });
     await tx.insert(documentFiles).values({ documentId: row.id, content: file.bytes });
     await replaceLinks(tx, row.id, meta);
+
+    const uploaded = await describeDocument(tx, row.id);
+    if (uploaded) {
+      await recordAudit(
+        actor,
+        {
+          action: "document.uploaded",
+          entity: { type: "document", id: row.id },
+          summary: uploaded.summary,
+          details: { values: snapshotValues(uploaded.snapshot) },
+        },
+        tx,
+      );
+    }
     return row.id;
   });
 }
@@ -569,11 +586,26 @@ export async function updateDocument(
 
   await getDb().transaction(async (tx) => {
     await assertTargets(tx, periodId, meta);
+    const before = await describeDocument(tx, documentId);
     await tx
       .update(documents)
       .set({ ...toColumns(meta), periodId })
       .where(eq(documents.id, documentId));
     await replaceLinks(tx, documentId, meta);
+
+    const after = await describeDocument(tx, documentId);
+    if (before && after) {
+      await recordAudit(
+        actor,
+        {
+          action: "document.updated",
+          entity: { type: "document", id: documentId },
+          summary: after.summary,
+          details: { changes: diffSnapshots(before.snapshot, after.snapshot) },
+        },
+        tx,
+      );
+    }
   });
 }
 
@@ -631,6 +663,12 @@ export async function attachReceiptsToCost(
       .where(inArray(documents.id, ids));
     if (rows.length !== ids.length) throw new NotFoundError("Ein Beleg wurde nicht gefunden.");
 
+    const before = new Map<number, AuditSnapshot>();
+    for (const id of ids) {
+      const described = await describeDocument(tx, id);
+      if (described) before.set(id, described.snapshot);
+    }
+
     for (const document of rows.filter((row) => row.periodId !== cost.periodId)) {
       const [{ links }] = await tx
         .select({ links: count() })
@@ -663,14 +701,48 @@ export async function attachReceiptsToCost(
     if (reviewed && ids.length === 1) {
       await tx.update(documents).set(reviewed).where(eq(documents.id, ids[0]));
     }
+
+    // Verknüpfung und übernommene Rechnungsdaten ändern die Belege – je Beleg ein Eintrag.
+    for (const id of ids) {
+      const after = await describeDocument(tx, id);
+      const changes = after ? diffSnapshots(before.get(id) ?? {}, after.snapshot) : [];
+      if (after && changes.length > 0) {
+        await recordAudit(
+          actor,
+          {
+            action: "document.updated",
+            entity: { type: "document", id },
+            summary: after.summary,
+            details: { changes, note: "Als Beleg mit einer Kostenposition verknüpft." },
+          },
+          tx,
+        );
+      }
+    }
   });
 }
 
 export async function deleteDocument(actor: SessionUser, documentId: number): Promise<void> {
   authorizeGlobalWrite(actor, "document:delete");
   await getAccessibleDocument(actor, documentId);
-  // Dateiinhalt und Verknüpfungen hängen per ON DELETE CASCADE am Dokument.
-  await getDb().delete(documents).where(eq(documents.id, documentId));
+
+  await getDb().transaction(async (tx) => {
+    const deleted = await describeDocument(tx, documentId);
+    // Dateiinhalt und Verknüpfungen hängen per ON DELETE CASCADE am Dokument.
+    await tx.delete(documents).where(eq(documents.id, documentId));
+    if (deleted) {
+      await recordAudit(
+        actor,
+        {
+          action: "document.deleted",
+          entity: { type: "document", id: documentId },
+          summary: deleted.summary,
+          details: { values: snapshotValues(deleted.snapshot) },
+        },
+        tx,
+      );
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -747,11 +819,17 @@ export async function processDocumentOcr(
   if (!ocr.isConfigured()) throw new DomainError("OCR ist nicht eingerichtet.");
 
   const db = getDb();
+  const entry = {
+    action: "document.ocr",
+    entity: { type: "document", id: documentId },
+    summary: document.fileName,
+  } as const;
   const fail = async (error: string): Promise<OcrOutcome> => {
     await db
       .update(documents)
       .set({ ocrStatus: "failed", ocrError: error, ocrProcessedAt: new Date() })
       .where(eq(documents.id, documentId));
+    await recordAudit(actor, { ...entry, details: { note: `Fehlgeschlagen: ${error}` } });
     return { status: "failed", fields: null, filled: [], error };
   };
 
@@ -790,6 +868,15 @@ export async function processDocumentOcr(
       ocrProcessedAt: new Date(),
     })
     .where(eq(documents.id, documentId));
+  await recordAudit(actor, {
+    ...entry,
+    details: {
+      note:
+        fillable.length > 0
+          ? `Übernommen: ${fillable.map((candidate) => candidate.label).join(", ")}.`
+          : "Ausgelesen – keine Werte übernommen.",
+    },
+  });
 
   return {
     status: "done",
