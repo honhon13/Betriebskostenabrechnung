@@ -37,6 +37,7 @@ async function attachProof(
       type: "payment_proof",
       description: input.purpose,
       unitId: input.unitId,
+      categoryId: null,
       costIds: [],
       paymentId,
       documentDate: input.paymentDate,

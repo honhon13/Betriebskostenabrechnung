@@ -121,6 +121,7 @@ export function buildStatement(input: StatementInput): Statement {
       categoryName: cost.categoryName,
       costDate: cost.costDate,
       amountCents: cost.amountCents,
+      credit: isCredit(cost.amountCents),
       keyName: cost.keyName,
       keyUnitLabel: cost.keyUnitLabel,
       totalWeight: [...weightByUnit.values()].reduce((a, b) => a + Math.max(b, 0), 0),
@@ -132,10 +133,15 @@ export function buildStatement(input: StatementInput): Statement {
   });
 
   const balances: UnitBalance[] = input.units.map((unit) => {
-    const costCents = lines.reduce(
-      (acc, line) => acc + (line.shares.find((s) => s.unitId === unit.id)?.cents ?? 0),
-      0,
-    );
+    // Kostenpositionen und Gutschriften getrennt summieren – jede Position ist für sich verteilt,
+    // eine Gutschrift verändert daher nie den Anteil an einer anderen Position.
+    const shareOf = (credit: boolean) =>
+      lines
+        .filter((line) => line.credit === credit)
+        .reduce((acc, line) => acc + (line.shares.find((s) => s.unitId === unit.id)?.cents ?? 0), 0);
+    const costBeforeCreditsCents = shareOf(false);
+    const creditCents = -shareOf(true) || 0;
+    const costCents = costBeforeCreditsCents - creditCents;
     // Nur eingegangene Zahlungen mindern den offenen Betrag; stornierte zählen nirgends.
     const sumByStatus = (status: PaymentStatus) =>
       input.payments
@@ -145,6 +151,8 @@ export function buildStatement(input: StatementInput): Statement {
     return {
       unitId: unit.id,
       unitName: unit.name,
+      costBeforeCreditsCents,
+      creditCents,
       costCents,
       paymentCents,
       pendingPaymentCents: sumByStatus("pending"),
@@ -152,14 +160,28 @@ export function buildStatement(input: StatementInput): Statement {
     };
   });
 
+  return { lines, balances, ...totalsOf(lines, balances) };
+}
+
+/** Negativer Betrag = Gutschrift. Die einzige Stelle, an der das Vorzeichen gedeutet wird. */
+export function isCredit(amountCents: number): boolean {
+  return amountCents < 0;
+}
+
+/** Summen über die Positionen einer Abrechnung – Kosten und Gutschriften getrennt. */
+function totalsOf(lines: StatementLine[], balances: UnitBalance[]) {
+  const sum = (selected: StatementLine[]) => selected.reduce((acc, l) => acc + l.amountCents, 0);
+  const credits = lines.filter((l) => l.credit);
+  const costBeforeCreditsCents = sum(lines.filter((l) => !l.credit));
+  const creditCents = -sum(credits) || 0;
+
   return {
-    lines,
-    balances,
-    totalCostCents: lines.reduce((acc, l) => acc + l.amountCents, 0),
+    costBeforeCreditsCents,
+    creditCents,
+    creditCount: credits.length,
+    totalCostCents: costBeforeCreditsCents - creditCents,
     totalPaymentCents: balances.reduce((acc, b) => acc + b.paymentCents, 0),
-    undistributedCents: lines
-      .filter((l) => !l.distributable)
-      .reduce((acc, l) => acc + l.amountCents, 0),
+    undistributedCents: sum(lines.filter((l) => !l.distributable)),
   };
 }
 
@@ -173,18 +195,16 @@ export function restrictStatementToUnit(statement: Statement, unitId: number | n
     .map((line) => ({ ...line, shares: line.shares.filter((s) => s.unitId === unitId) }));
   const balances = statement.balances.filter((b) => b.unitId === unitId);
 
-  return {
-    lines,
-    balances,
-    totalCostCents: lines.reduce((acc, l) => acc + l.amountCents, 0),
-    totalPaymentCents: balances.reduce((acc, b) => acc + b.paymentCents, 0),
-    undistributedCents: lines
-      .filter((l) => !l.distributable)
-      .reduce((acc, l) => acc + l.amountCents, 0),
-  };
+  return { lines, balances, ...totalsOf(lines, balances) };
 }
 
 export interface StatementTotals {
+  /** Kostenpositionen ohne Gutschriften. */
+  costBeforeCreditsCents: number;
+  /** Gutschriften, als positiver Betrag. */
+  creditCents: number;
+  creditCount: number;
+  /** Nettokosten: Kostenpositionen minus Gutschriften. */
   costCents: number;
   paymentCents: number;
   pendingPaymentCents: number;
@@ -197,10 +217,17 @@ export interface StatementTotals {
  * (auch noch nicht verteilbare Kosten); für eine einzelne TOP nur ihr Anteil.
  */
 export function summarizeStatement(statement: Statement, allUnits: boolean): StatementTotals {
-  const costCents = allUnits
-    ? statement.totalCostCents
-    : statement.balances.reduce((acc, b) => acc + b.costCents, 0);
+  const ofBalances = (pick: (balance: UnitBalance) => number) =>
+    statement.balances.reduce((acc, b) => acc + pick(b), 0);
+  const costBeforeCreditsCents = allUnits
+    ? statement.costBeforeCreditsCents
+    : ofBalances((b) => b.costBeforeCreditsCents);
+  const creditCents = allUnits ? statement.creditCents : ofBalances((b) => b.creditCents);
+  const costCents = costBeforeCreditsCents - creditCents;
   return {
+    costBeforeCreditsCents,
+    creditCents,
+    creditCount: statement.creditCount,
     costCents,
     paymentCents: statement.totalPaymentCents,
     pendingPaymentCents: statement.balances.reduce((acc, b) => acc + b.pendingPaymentCents, 0),

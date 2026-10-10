@@ -67,6 +67,10 @@ const optionalAmountCents = z
     return cents;
   });
 
+/** Pflichtauswahl, die im Formular offen bleiben kann (leerer Eintrag „Bitte wählen“). */
+const requiredChoice = (message: string) =>
+  z.coerce.number(message).int(message).positive(message).max(2_147_483_647, message);
+
 const optionalId = z
   .union([z.literal(""), id])
   .nullish()
@@ -173,7 +177,7 @@ export const costSchema = z
   .object({
     /** Abrechnungsjahr der Kostenposition. */
     periodId: id,
-    categoryId: id,
+    categoryId: requiredChoice("Bitte eine Kostenart wählen."),
     description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
     ...costInvoiceFields,
     allocationKeyId: id,
@@ -195,7 +199,7 @@ export const receiptIdsSchema = z.array(id).max(20);
 export const costSubmissionSchema = z
   .object({
     periodId: id,
-    categoryId: id,
+    categoryId: requiredChoice("Bitte eine Kostenart wählen."),
     description: z.string().trim().min(1, "Bitte eine Beschreibung angeben.").max(200),
     ...costInvoiceFields,
     notes: optionalText(1000),
@@ -326,7 +330,13 @@ export const reviewDecisionSchema = z.object({
 // Dokumente
 // ---------------------------------------------------------------------------
 
-export const documentTypeSchema = z.enum(["invoice", "payment_proof", "contract", "other"]);
+export const documentTypeSchema = z.enum([
+  "invoice",
+  "credit_note",
+  "payment_proof",
+  "contract",
+  "other",
+]);
 
 export const documentMetaSchema = z
   .object({
@@ -334,6 +344,8 @@ export const documentMetaSchema = z
     description: optionalText(1000),
     /** Optional: TOP, zu der das Dokument gehört. */
     unitId: optionalId,
+    /** Kostenart eines Belegs (Rechnung, Gutschrift) – leer = offen. */
+    categoryId: optionalId,
     /** Verknüpfte Kostenpositionen (keine, eine oder mehrere). */
     costIds: z.array(id).max(100).default([]),
     /** Verknüpfte Einzahlung, z. B. bei einem Zahlungsnachweis. */

@@ -232,6 +232,7 @@ const documentAction: AddAction = ({ user, period }, data) => {
         units={direct ? data.units : []}
         costs={data.links.costs}
         payments={data.links.payments}
+        categories={data.categories}
         defaultPeriodId={preset.id}
         ocrAvailable={direct && data.ocrAvailable}
         listHref={direct ? undefined : SUBMISSIONS_HREF}

@@ -1,9 +1,12 @@
 // Nachbau der Azure-Document-Intelligence-REST-API für die End-to-End-Tests.
 // Verhält sich wie der echte Dienst (202 + Operation-Location, Abholen per Polling,
 // Fehlerformat), liefert aber feste Ergebnisse – gesteuert über eine Marke im Dokument:
-//   OCR-RECHNUNG  → vollständig erkannte Rechnung
-//   OCR-UNLESBAR  → Dienst lehnt die Datei als beschädigt ab
-//   sonst         → Analyse erfolgreich, aber keine Rechnungsdaten erkannt
+//   OCR-RECHNUNG   → vollständig erkannte Rechnung
+//   OCR-GUTSCHRIFT → Gutschrift desselben Rechnungsstellers – wie beim echten Dienst mit positiven
+//                    Beträgen; dass es eine Gutschrift ist, steht nur im erkannten Text
+//   OCR-UNKLAR     → Rechnung, deren Inhalt zu keiner Kostenart passt
+//   OCR-UNLESBAR   → Dienst lehnt die Datei als beschädigt ab
+//   sonst          → Analyse erfolgreich, aber keine Rechnungsdaten erkannt
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
@@ -37,6 +40,46 @@ const INVOICE_FIELDS = {
       { type: "object", valueObject: { Description: { type: "string", valueString: "Kehrung", content: "Kehrung" } } },
       { type: "object", valueObject: { Description: { type: "string", valueString: "Abgasmessung", content: "Abgasmessung" } } },
     ],
+  },
+};
+
+const item = (description) => ({
+  type: "object",
+  valueObject: { Description: { type: "string", valueString: description, content: description } },
+});
+
+/** Ergebnis je Marke: erkannte Felder und der Volltext des Dokuments (`analyzeResult.content`). */
+const RESULTS = {
+  "OCR-GUTSCHRIFT": {
+    fields: {
+      VendorName: INVOICE_FIELDS.VendorName,
+      InvoiceId: { type: "string", valueString: "GS-2026-0007", content: "GS-2026-0007", confidence: 0.96 },
+      InvoiceDate: { type: "date", valueDate: "2026-04-02", content: "02.04.2026", confidence: 0.98 },
+      SubTotal: currency(50),
+      TotalTax: currency(10),
+      InvoiceTotal: currency(60),
+      Items: { type: "array", valueArray: [item("Gutschrift Abgasmessung")] },
+    },
+    content:
+      "Rauchfangkehrer Muster GmbH\nGutschrift Nr. GS-2026-0007\nzur Rechnung RE-2026-0042 vom 15.03.2026\n" +
+      "Pos Bezeichnung Betrag\n1 Gutschrift Abgasmessung 50,00\nMwSt. 20 % 10,00\nGesamt 60,00",
+  },
+  "OCR-UNKLAR": {
+    fields: {
+      VendorName: { type: "string", valueString: "Muster Handels GmbH", content: "Muster Handels GmbH", confidence: 0.94 },
+      InvoiceId: { type: "string", valueString: "MH-77", content: "MH-77", confidence: 0.95 },
+      InvoiceDate: { type: "date", valueDate: "2026-05-20", content: "20.05.2026", confidence: 0.98 },
+      InvoiceTotal: currency(120),
+      Items: { type: "array", valueArray: [item("Diverse Leistungen")] },
+    },
+    content:
+      "Muster Handels GmbH\nRechnung Nr. MH-77\nPos Bezeichnung Betrag\n1 Diverse Leistungen 120,00\nGesamt 120,00",
+  },
+  "OCR-RECHNUNG": {
+    fields: INVOICE_FIELDS,
+    content:
+      "Rauchfangkehrer Muster GmbH\nRechnung Nr. RE-2026-0042\nRechnungsdatum 15.03.2026\n" +
+      "Pos Bezeichnung Betrag\n1 Kehrung 120,00\n2 Abgasmessung 59,00\nMwSt. 20 % 35,80\nGesamt 214,80",
   },
 };
 
@@ -77,7 +120,8 @@ const server = createServer(async (request, response) => {
     }
 
     const id = randomUUID();
-    operations.set(id, { polls: 0, fields: content.includes("OCR-RECHNUNG") ? INVOICE_FIELDS : null });
+    const marker = Object.keys(RESULTS).find((key) => content.includes(key));
+    operations.set(id, { polls: 0, result: marker ? RESULTS[marker] : null });
     return send(response, 202, null, {
       "Operation-Location": `http://localhost:${PORT}/documentintelligence/documentModels/${analyze[1]}/analyzeResults/${id}?api-version=${url.searchParams.get("api-version")}`,
     });
@@ -94,7 +138,10 @@ const server = createServer(async (request, response) => {
       analyzeResult: {
         apiVersion: url.searchParams.get("api-version"),
         modelId: "prebuilt-invoice",
-        documents: operation.fields ? [{ docType: "invoice", fields: operation.fields, confidence: 1 }] : [],
+        content: operation.result?.content ?? "",
+        documents: operation.result
+          ? [{ docType: "invoice", fields: operation.result.fields, confidence: 1 }]
+          : [],
       },
     });
   }

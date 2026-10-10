@@ -1,4 +1,4 @@
-import type { Statement } from "@/types/billing";
+import type { Statement, StatementLine } from "@/types/billing";
 
 /** Ein Zeitabschnitt im Kostenverlauf: ein Monat oder ein Abrechnungsjahr. */
 export interface TrendPoint {
@@ -6,10 +6,13 @@ export interface TrendPoint {
   label: string;
   /** Ausgeschriebener Zeitraum für Tooltip und Tabelle, z. B. „März 2025“. */
   title: string;
-  /** Kostenanteil je TOP, in derselben Reihenfolge wie `units` des Verlaufs. */
+  /** Kostenanteil je TOP – ohne Gutschriften –, in derselben Reihenfolge wie `units` des Verlaufs. */
   shares: number[];
   /** Kosten, die mangels Schlüsselwerten noch keiner TOP zugeordnet sind. */
   undistributedCents: number;
+  /** Gutschriften des Zeitabschnitts, als positiver Betrag – nie Teil der Kostensäulen. */
+  creditCents: number;
+  /** Nettokosten: Kosten minus Gutschriften. */
   totalCents: number;
 }
 
@@ -19,8 +22,15 @@ export interface CostTrend {
   /** Die Reihen des Diagramms: alle TOPs bzw. nur die eigene. */
   units: { id: number; name: string }[];
   points: TrendPoint[];
+  /** Kosten ohne Gutschriften über alle Zeitabschnitte. */
+  costCents: number;
+  /** Gutschriften über alle Zeitabschnitte, als positiver Betrag. */
+  creditCents: number;
+  /** Nettokosten über alle Zeitabschnitte. */
   totalCents: number;
 }
+
+type OpenPoint = Omit<TrendPoint, "totalCents">;
 
 const MONTHS = ["Jän", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 const MONTHS_LONG = [
@@ -38,19 +48,46 @@ const MONTHS_LONG = [
   "Dezember",
 ];
 
-function finish(
-  mode: CostTrend["mode"],
-  units: CostTrend["units"],
-  points: Omit<TrendPoint, "totalCents">[],
-): CostTrend {
+const emptyPoint = (label: string, title: string, units: CostTrend["units"]): OpenPoint => ({
+  label,
+  title,
+  shares: units.map(() => 0),
+  undistributedCents: 0,
+  creditCents: 0,
+});
+
+/**
+ * Rechnet eine Position der Abrechnung in den Zeitabschnitt ein. Gutschriften stehen neben den
+ * Kosten, nie in den Säulen der TOPs: gezählt wird der sichtbare Anteil – in der Abrechnung
+ * einer einzelnen TOP also nur ihr eigener.
+ */
+function addLine(point: OpenPoint, units: CostTrend["units"], line: StatementLine): void {
+  if (!line.distributable) {
+    if (line.credit) point.creditCents -= line.amountCents;
+    else point.undistributedCents += line.amountCents;
+    return;
+  }
+  for (const share of line.shares) {
+    const index = units.findIndex((unit) => unit.id === share.unitId);
+    if (index === -1) continue;
+    if (line.credit) point.creditCents -= share.cents;
+    else point.shares[index] += share.cents;
+  }
+}
+
+function finish(mode: CostTrend["mode"], units: CostTrend["units"], points: OpenPoint[]): CostTrend {
+  const costOf = (point: OpenPoint) =>
+    point.shares.reduce((a, b) => a + b, 0) + point.undistributedCents;
   const withTotals = points.map((point) => ({
     ...point,
-    totalCents: point.shares.reduce((a, b) => a + b, 0) + point.undistributedCents,
+    totalCents: costOf(point) - point.creditCents,
   }));
   return {
     mode,
     units,
     points: withTotals,
+    costCents: points.reduce((acc, point) => acc + costOf(point), 0),
+    creditCents: points.reduce((acc, point) => acc + point.creditCents, 0),
     totalCents: withTotals.reduce((acc, point) => acc + point.totalCents, 0),
   };
 }
@@ -63,28 +100,22 @@ function finish(
 export function buildMonthlyTrend(year: number, statement: Statement): CostTrend {
   const units = statement.balances.map((b) => ({ id: b.unitId, name: b.unitName }));
   // Index 0–11 = Monate, 12 = ohne Datum.
-  const points = Array.from({ length: 13 }, (_, index) => ({
-    label: index < 12 ? MONTHS[index] : "o. D.",
-    title: index < 12 ? `${MONTHS_LONG[index]} ${year}` : "Ohne Datum / außerhalb des Jahres",
-    shares: units.map(() => 0),
-    undistributedCents: 0,
-  }));
+  const points = Array.from({ length: 13 }, (_, index) =>
+    index < 12
+      ? emptyPoint(MONTHS[index], `${MONTHS_LONG[index]} ${year}`, units)
+      : emptyPoint("o. D.", "Ohne Datum / außerhalb des Jahres", units),
+  );
 
   for (const line of statement.lines) {
     const inYear = line.costDate !== null && Number(line.costDate.slice(0, 4)) === year;
-    const point = points[inYear ? Number(line.costDate!.slice(5, 7)) - 1 : 12];
-    if (!line.distributable) {
-      point.undistributedCents += line.amountCents;
-      continue;
-    }
-    for (const share of line.shares) {
-      const index = units.findIndex((unit) => unit.id === share.unitId);
-      if (index !== -1) point.shares[index] += share.cents;
-    }
+    addLine(points[inYear ? Number(line.costDate!.slice(5, 7)) - 1 : 12], units, line);
   }
 
   const undated = points[12];
-  const hasUndated = undated.undistributedCents !== 0 || undated.shares.some((cents) => cents !== 0);
+  const hasUndated =
+    undated.undistributedCents !== 0 ||
+    undated.creditCents !== 0 ||
+    undated.shares.some((cents) => cents !== 0);
   return finish("months", units, hasUndated ? points : points.slice(0, 12));
 }
 
@@ -98,13 +129,10 @@ export function buildYearlyTrend(years: { year: number; statement: Statement }[]
 
   const points = [...years]
     .sort((a, b) => a.year - b.year)
-    .map(({ year, statement }) => ({
-      label: String(year),
-      title: `Abrechnungsjahr ${year}`,
-      shares: unitList.map(
-        (unit) => statement.balances.find((b) => b.unitId === unit.id)?.costCents ?? 0,
-      ),
-      undistributedCents: statement.undistributedCents,
-    }));
+    .map(({ year, statement }) => {
+      const point = emptyPoint(String(year), `Abrechnungsjahr ${year}`, unitList);
+      for (const line of statement.lines) addLine(point, unitList, line);
+      return point;
+    });
   return finish("years", unitList, points);
 }

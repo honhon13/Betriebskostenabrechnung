@@ -1,4 +1,4 @@
-import { formatCents } from "@/lib/format";
+import { formatCents, formatCredit } from "@/lib/format";
 import type { CostTrend } from "@/lib/billing/trend";
 import { cn } from "@/lib/utils";
 
@@ -30,14 +30,20 @@ interface CostTrendChartProps {
  * Kostenverlauf als gestapelte Säulen: X-Achse = Zeitraum (Monate oder Jahre),
  * Y-Achse = Kosten in Euro, eine Farbe je TOP. Die Säulenhöhe ist die Summe – so sieht man
  * Gesamtverlauf und Anteile der TOPs in einem Bild. Die exakten Werte stehen in der Tabelle.
+ *
+ * Gutschriften sind keine Kosten und bekommen keine Säule: sie stehen als Betrag im Tooltip
+ * und in einer eigenen Spalte der Tabelle, die „Summe“ dort sind die Nettokosten.
  */
 export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
   // Mehr als drei Reihen bekämen keine sauber unterscheidbaren Farben – dann nur die Summe zeigen.
   const stacked = trend.units.length > 1 && trend.units.length <= SERIES.length;
   const series = stacked ? trend.units.map((unit) => unit.name) : [singleLabel];
   const hasUndistributed = trend.points.some((point) => point.undistributedCents > 0);
+  const hasCredits = trend.creditCents > 0;
+  const costOf = (point: CostTrend["points"][number]) => point.totalCents + point.creditCents;
+  const withSum = stacked || hasUndistributed || hasCredits;
 
-  const max = niceMax(Math.max(...trend.points.map((point) => point.totalCents), 0));
+  const max = niceMax(Math.max(...trend.points.map(costOf), 0));
   const ticks = [max, max / 2, 0];
   const height = (cents: number) => `${(Math.max(cents, 0) / max) * 100}%`;
   const segmentsOf = (point: CostTrend["points"][number]) =>
@@ -98,7 +104,13 @@ export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
                     ? [`Noch nicht verteilt: ${formatCents(point.undistributedCents)}`]
                     : []),
                   ...(segments.length > 1 || point.undistributedCents > 0
-                    ? [`Summe: ${formatCents(point.totalCents)}`]
+                    ? [`${hasCredits ? "Kosten" : "Summe"}: ${formatCents(costOf(point))}`]
+                    : []),
+                  ...(point.creditCents > 0
+                    ? [
+                        `Gutschriften: ${formatCredit(point.creditCents)}`,
+                        `Nettokosten: ${formatCents(point.totalCents)}`,
+                      ]
                     : []),
                 ].join("\n");
                 return (
@@ -169,9 +181,14 @@ export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
                     Nicht verteilt
                   </th>
                 ) : null}
-                {stacked || hasUndistributed ? (
+                {hasCredits ? (
+                  <th scope="col" className="px-2 py-1.5 text-right font-medium">
+                    Gutschriften
+                  </th>
+                ) : null}
+                {withSum ? (
                   <th scope="col" className="py-1.5 pl-2 text-right font-medium">
-                    Summe
+                    {hasCredits ? "Nettokosten" : "Summe"}
                   </th>
                 ) : null}
               </tr>
@@ -192,7 +209,12 @@ export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
                       {formatCents(point.undistributedCents)}
                     </td>
                   ) : null}
-                  {stacked || hasUndistributed ? (
+                  {hasCredits ? (
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {formatCredit(point.creditCents)}
+                    </td>
+                  ) : null}
+                  {withSum ? (
                     <td className="py-1.5 pl-2 text-right font-medium tabular-nums">
                       {formatCents(point.totalCents)}
                     </td>

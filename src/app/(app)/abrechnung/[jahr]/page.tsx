@@ -1,4 +1,4 @@
-import { ReceiptText, Scale, Wallet } from "lucide-react";
+import { FileMinus, ReceiptText, Scale, Sigma, Wallet } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -13,7 +13,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
 import { summarizeStatement } from "@/lib/billing/allocation";
-import { formatCents } from "@/lib/format";
+import { creditCountLabel, formatCents, formatCredit } from "@/lib/format";
 import { listUnits } from "@/services/masterdata.service";
 import { loadPeriodPage } from "@/services/page-context";
 import { listPayments } from "@/services/payments.service";
@@ -26,8 +26,9 @@ export async function generateMetadata({
 }
 
 /**
- * Abrechnungsübersicht eines Jahres: Gesamtsummen, Kostenverteilung und je TOP
- * Kostenanteil, Einzahlungen, Differenz samt Kostenpositionen und Belegen.
+ * Abrechnungsübersicht eines Jahres: Gesamtsummen – Kosten, Gutschriften und Nettokosten
+ * getrennt –, Kostenverteilung und je TOP Kostenanteil, Einzahlungen, Differenz samt
+ * Kostenpositionen und Belegen.
  */
 export default async function StatementPage({
   params,
@@ -45,6 +46,7 @@ export default async function StatementPage({
   const totals = summarizeStatement(statement, scope.allUnits);
   const draft = period.status === "draft";
   const highlighted = Number((await searchParams).position);
+  const costCount = statement.lines.length - statement.creditCount;
 
   if (statement.lines.length === 0 && payments.length === 0) {
     return (
@@ -79,15 +81,34 @@ export default async function StatementPage({
         </Alert>
       ) : null}
 
-      <section aria-label="Gesamt" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Obere Reihe: die Kostenseite. Gutschriften sind eine eigene Position, keine Kosten. */}
+      <section aria-label="Gesamt" className="grid grid-cols-2 gap-3 sm:grid-cols-6">
         <StatTile
-          label={scope.allUnits ? "Gesamtkosten" : "Mein Kostenanteil"}
-          value={formatCents(totals.costCents)}
+          className="sm:col-span-2"
+          label={scope.allUnits ? "Kosten" : "Kosten (mein Anteil)"}
+          value={formatCents(totals.costBeforeCreditsCents)}
           icon={ReceiptText}
         >
-          {statement.lines.length} {statement.lines.length === 1 ? "Position" : "Positionen"}
+          {costCount} {costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
         </StatTile>
         <StatTile
+          className="sm:col-span-2"
+          label={scope.allUnits ? "Gutschriften" : "Gutschriften (mein Anteil)"}
+          value={formatCredit(totals.creditCents)}
+          icon={FileMinus}
+        >
+          {totals.creditCount === 0 ? "Keine Gutschriften" : creditCountLabel(totals.creditCount)}
+        </StatTile>
+        <StatTile
+          className="sm:col-span-2"
+          label={scope.allUnits ? "Nettokosten" : "Mein Kostenanteil"}
+          value={formatCents(totals.costCents)}
+          icon={Sigma}
+        >
+          Kosten abzüglich Gutschriften
+        </StatTile>
+        <StatTile
+          className="sm:col-span-3"
           label={scope.allUnits ? "Gesamtzahlungen" : "Meine Einzahlungen"}
           value={formatCents(totals.paymentCents)}
           icon={Wallet}
@@ -96,7 +117,12 @@ export default async function StatementPage({
             ? `zusätzlich ${formatCents(totals.pendingPaymentCents)} offen erwartet`
             : "eingegangene Zahlungen"}
         </StatTile>
-        <StatTile label="Differenz" value={formatCents(Math.abs(totals.balanceCents))} icon={Scale}>
+        <StatTile
+          className="col-span-2 sm:col-span-3"
+          label="Differenz"
+          value={formatCents(Math.abs(totals.balanceCents))}
+          icon={Scale}
+        >
           <BalanceBadge cents={totals.balanceCents} />
         </StatTile>
       </section>

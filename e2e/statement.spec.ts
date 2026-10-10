@@ -8,7 +8,7 @@ test.describe("Jahresabrechnung als PDF", () => {
   test("ADMIN: Dialog erstellt die Gesamtabrechnung und die Abrechnung je TOP", async ({ page }) => {
     await login(page, "top2");
     await page.goto(`/abrechnung/${RELEASED_YEAR}`);
-    // Gesamtkosten laut Oberfläche – dieselbe Zahl muss im PDF stehen.
+    // Kosten laut Oberfläche (erste Kachel) – dieselbe Zahl muss im PDF stehen.
     const total = /[\d.]+,\d{2}/.exec(await page.getByRole("region", { name: "Gesamt" }).innerText())![0];
 
     await page.getByRole("button", { name: "Jahresabrechnung erstellen" }).click();

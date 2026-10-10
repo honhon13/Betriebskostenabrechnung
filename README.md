@@ -6,10 +6,10 @@ TOP freigeben. Die TOPs reichen eigene Einträge ein, die Verwaltung prüft sie.
 
 | Bereich | Inhalt |
 | --- | --- |
-| **Dashboard** | Abrechnungsperiode, Gesamtkosten, Kostenverlauf (Diagramm je Monat oder Jahr), Kosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
-| **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen, Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente; Jahresabrechnung als PDF |
+| **Dashboard** | Abrechnungsperiode, Kosten, Gutschriften und Nettokosten, Kostenverlauf (Diagramm je Monat oder Jahr), Nettokosten/Einzahlungen/Differenz je TOP, offene Positionen, letzte Dokumente und Aktivitäten |
+| **Abrechnung** | Jahresübersicht; je Jahr: Gesamtsummen (Kosten, Gutschriften, Nettokosten), Kostenverteilung, Abrechnung je TOP mit Kostenpositionen und Belegen, Kosten, Monatsübersicht, Umlageschlüssel, Dokumente; Jahresabrechnung als PDF |
 | **Einzahlungen** | Je TOP mit Datum, Betrag, Jahr, Beschreibung, Zahlungsstatus und Nachweis; Guthaben/Nachzahlung je TOP; **Abrechnungskonto** mit Anfangssaldo, Bewegungen und aktuellem Saldo je TOP |
-| **Dokumente** | Rechnungen, Zahlungsnachweise, Verträge, Sonstiges – mit Suche, Filtern, Sortierung, Vorschau und Download |
+| **Dokumente** | Rechnungen, Gutschriften, Zahlungsnachweise, Verträge, Sonstiges – mit Suche, Filtern, Sortierung, Vorschau und Download; Belege werden per OCR ausgelesen, als Rechnung oder Gutschrift erkannt und einer Kostenart zugeordnet |
 | **Wiederkehrende Kosten** | Vorlagen mit Betrag, Intervall, Umlageschlüssel und TOP-Zuordnung; daraus Kostenpositionen je Monat, Quartal oder Jahr erzeugen |
 | **Meine Eingaben** (USER) | Kosten, Einzahlungen, Dokumente und Abrechnungsjahre einreichen; Prüfstand und Kommentar der Verwaltung sehen |
 | **Prüfung** (ADMIN) | Eingereichte Einträge ansehen, freigeben, ablehnen, bearbeiten oder löschen |
@@ -225,8 +225,10 @@ in den Spalten `review_status`, `reviewed_at`, `reviewed_by` und `review_comment
 Das Diagramm im Dashboard zeigt die Kosten (€, Y-Achse) über den Zeitraum (X-Achse) –
 wahlweise je Monat eines Abrechnungsjahres oder je Jahr im Vergleich aller Jahre. Es wird bei
 jedem Aufruf aus den gespeicherten, freigegebenen Kosten berechnet. Die Verwaltung sieht die
-Gesamtkosten gestapelt nach TOP (noch nicht verteilte Beträge eigens ausgewiesen), USER ihren
+Kosten gestapelt nach TOP (noch nicht verteilte Beträge eigens ausgewiesen), USER ihren
 eigenen Anteil in freigegebenen Jahren. Unter „Werte als Tabelle" stehen dieselben Zahlen.
+Gutschriften bekommen keine Säule: sie stehen als Betrag im Kartenkopf, im Tooltip und in einer
+eigenen Tabellenspalte, die letzte Spalte sind dann die Nettokosten.
 
 ## Architektur
 
@@ -241,7 +243,8 @@ src/
     ocr/         OCRService (Azure Document Intelligence)
   db/            Drizzle-Schema, Migrationen, Seed
   lib/           Reine Hilfsfunktionen: Verteilung, Monatsübersicht, Beträge, Validierung,
-                 Audit-Katalog, PDF-Aufbau (lib/pdf)
+                 Audit-Katalog, PDF-Aufbau (lib/pdf), Auswertung ausgelesener Belege (lib/ocr:
+                 Rechnung oder Gutschrift, Kostenart)
   types/         DTOs zwischen Services und Oberfläche
 tests/           Unit-Tests (Vitest)
 e2e/             End-to-End-Tests (Playwright)
@@ -265,7 +268,8 @@ Sitzungen des Benutzers.
 **Beträge** werden in Cent gespeichert und gerechnet. Die Verteilung nutzt das Verfahren der
 größten Reste – die Summe der Anteile entspricht immer exakt dem Betrag.
 
-**Berechnung:** Einzahlungen − Kostenanteil = Guthaben (positiv) bzw. Nachzahlung (negativ).
+**Berechnung:** Kosten − Gutschriften = Nettokosten; Einzahlungen − Nettokostenanteil = Guthaben
+(positiv) bzw. Nachzahlung (negativ). Details unter [Gutschriften](#gutschriften).
 Es zählen nur Einzahlungen mit Status „Eingegangen"; „Offen" merkt eine erwartete Zahlung vor,
 „Storniert" zählt nirgends. Die Monatsübersicht ordnet Kosten nach Rechnungsdatum und
 Einzahlungen nach Zahlungsdatum zu; was in keinen Monat des Jahres fällt, steht in einer
@@ -279,11 +283,11 @@ Sammelzeile, damit die Jahressummen mit der Abrechnung übereinstimmen.
 | `units` | TOPs mit Wohnfläche und Personen |
 | `billing_periods` | Abrechnungsjahre mit Status Entwurf/Freigegeben und Prüfstand |
 | `cost_categories`, `allocation_keys`, `allocation_values` | Kostenarten, Umlageschlüssel und deren Werte je Jahr und TOP |
-| `costs`, `cost_units` | Kostenpositionen mit Rechnungsdaten (Rechnungssteller, Nummer, Datum, Leistungszeitraum, Netto, MwSt., Brutto) und ihre TOP-Zuordnung; `recurring_cost_id` vermerkt die Vorlage, aus der eine Position erzeugt wurde |
+| `costs`, `cost_units` | Kostenpositionen mit Rechnungsdaten (Rechnungssteller, Nummer, Datum, Leistungszeitraum, Netto, MwSt., Brutto) und ihre TOP-Zuordnung; ein negativer Betrag ist eine Gutschrift; `recurring_cost_id` vermerkt die Vorlage, aus der eine Position erzeugt wurde |
 | `recurring_costs`, `recurring_cost_units` | Vorlagen für wiederkehrende Kosten und ihre TOP-Zuordnung |
 | `payments` | Einzahlungen je TOP mit Zahlungsstatus – zugleich die Bewegungen des Abrechnungskontos (negativ = Auszahlung) |
 | `account_settings`, `account_opening_balances` | Stichtag der Kontoführung (eine Zeile) und Anfangssaldo je TOP |
-| `documents`, `document_files`, `document_links` | Dokumente (Metadaten), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
+| `documents`, `document_files`, `document_links` | Dokumente (Metadaten, Dokumenttyp inkl. `credit_note`, Kostenart `category_id`, OCR-Ergebnis samt Auswertung in `ocr_result`), ihr Dateiinhalt und ihre Verknüpfungen mit Kostenpositionen und Einzahlungen |
 | `audit_log` | Audit-Log: Zeitpunkt, Benutzer/TOP, Aktion, Datensatz, vorherige/neue Werte – nur anhängbar |
 
 `billing_periods`, `costs`, `payments` und `documents` tragen jeweils Prüfstand, Prüfdatum,
@@ -315,7 +319,8 @@ Vercel Functions); der Typ wird am Dateiinhalt erkannt. Größere Fotos verklein
 vor dem Upload.
 
 Dokumente lassen sich an drei Stellen hochladen: über „Hinzufügen → Dokument hochladen", direkt
-beim Anlegen einer Kostenposition (als Rechnung) und bei einer Einzahlung (als Zahlungsnachweis).
+beim Anlegen einer Kostenposition (als Rechnung bzw. Gutschrift) und bei einer Einzahlung (als
+Zahlungsnachweis).
 Ein Dokument kann mit mehreren Kostenpositionen verknüpft sein, z. B. eine Vorschreibung, die
 auf mehrere Positionen aufgeteilt wurde.
 
@@ -352,6 +357,9 @@ Modell) steht in `documents.ocr_result`; die übernommenen Werte in den jeweilig
 | Verarbeitet | Auswertung abgeschlossen – auch wenn nichts erkannt wurde |
 | Fehler | Auswertung gescheitert; der Grund steht am Dokument (`ocr_error`) |
 
+Belege (Rechnung, Gutschrift) werden nach dem Auslesen zusätzlich ausgewertet – siehe
+[Gutschriften](#gutschriften) und [Automatische Kostenart](#automatische-kostenart).
+
 Ein OCR-Fehler lässt den Upload nicht scheitern: Das Dokument ist gespeichert, die Felder
 lassen sich von Hand ausfüllen, und über die Schaltfläche „per OCR auslesen" kann man es
 später erneut versuchen. Gemeldet werden u. a. nicht lesbare oder passwortgeschützte Dateien,
@@ -374,11 +382,13 @@ Im Kostenformular der Verwaltung läuft die OCR **vor** dem Speichern:
    Solange das läuft, ist „Speichern" gesperrt.
 3. Erkannte Werte stehen in den noch leeren Feldern: Rechnungssteller, Rechnungsnummer,
    Rechnungsdatum, Leistungszeitraum, Beschreibung, Netto, MwSt. und Betrag (brutto). Nicht
-   Erkanntes bleibt leer.
+   Erkanntes bleibt leer. Eine erkannte Gutschrift steht mit Minus im Betrag; die Kostenart ist
+   vorgewählt, wenn die Auswertung sicher ist – sonst steht sie auf „Bitte wählen …".
 4. Prüfen, korrigieren, speichern. Dabei werden die Belege mit der Kostenposition verknüpft.
 
-Bei genau einem Beleg übernimmt das Dokument die im Formular geprüften Rechnungsdaten – Position
-und Beleg widersprechen sich dann nicht; was die OCR erkannt hat, bleibt in `ocr_result`. Ein
+Bei genau einem Beleg übernimmt das Dokument die im Formular geprüften Rechnungsdaten samt
+Kostenart, und sein Dokumenttyp folgt dem Betrag (negativ = Gutschrift) – Position und Beleg
+widersprechen sich dann nicht; was die OCR erkannt hat, bleibt in `ocr_result`. Ein
 OCR-Fehler blockiert nichts: der Beleg ist gespeichert, die Felder lassen sich von Hand ausfüllen.
 Wird das Formular ohne Speichern geschlossen oder ein Beleg entfernt, wird das Dokument wieder
 gelöscht.
@@ -390,6 +400,84 @@ Von USER eingereichte Dokumente und Belege werden nicht automatisch ausgelesen (
 Recht `document:ocr` voraus); die Verwaltung kann sie per Schaltfläche auslesen. Ihr Beleg im
 Kostenformular geht deshalb wie bisher erst beim Einreichen mit – das Dateifeld steht aber auch
 dort ganz oben.
+
+## Gutschriften
+
+Eine Gutschrift ist eine **eigene Position mit negativem Betrag** (`costs.amount_cents < 0`) –
+wie eine Kostenposition mit Kostenart, Umlageschlüssel, TOP-Zuordnung, Beleg und Prüfstand. Sie
+wird nie mit einer Rechnung verrechnet oder in sie hineingebucht:
+
+- **Ursprüngliche Kostenpositionen bleiben unverändert.** Jede Position wird für sich auf die
+  TOPs verteilt; eine Gutschrift ändert weder Betrag noch Anteile einer anderen Position.
+- **Kontobewegungen bleiben unverändert.** Gutschriften sind keine Ein- oder Auszahlungen und
+  kommen im Abrechnungskonto nicht vor. Wird eine Gutschrift tatsächlich ausbezahlt, ist das
+  eine Auszahlung unter *Einzahlungen* (negativer Betrag).
+- **Nettokosten = Kosten − Gutschriften**, über alle TOPs und je TOP (Kostenanteil minus
+  Gutschriftanteil, cent-genau nach dem Verfahren der größten Reste). Guthaben bzw. Nachzahlung
+  ergibt sich aus Einzahlungen minus Nettokosten.
+- Es zählen wie überall nur **freigegebene** Positionen: eine von einem USER eingereichte
+  Gutschrift wirkt erst nach der Prüfung, in freigegebenen Jahren ist sie wie jede Position
+  gesperrt.
+
+Gutschriften stehen überall getrennt von den Kosten – mit Anzahl und Betrag:
+
+| Ansicht | Darstellung |
+| --- | --- |
+| Dashboard | Kacheln *Kosten*, *Gutschriften* (Anzahl, Betrag) und *Nettokosten*; je Kostenart eine eigene Zeile unter dem Balken; im Kostenverlauf als Betrag und Tabellenspalte; Aktivität „Gutschrift erfasst" |
+| Abrechnung | Kacheln wie im Dashboard; in der Kostenverteilung markierte Positionen und die Summenzeilen *Kosten*, *Gutschriften*, *Nettokosten*; ebenso je TOP |
+| Kosten | Markierung „Gutschrift" an der Position; Summenzeilen *Kosten*, *Gutschriften (n)*, *Nettokosten* |
+| Monats- und Jahresübersicht | Eigene Spalte *Gutschriften* |
+| Jahresabrechnung (PDF) | Ergebnis mit *Kosten*, *Gutschriften (n)* und *Nettokosten*; eigener Abschnitt *Gutschriften* nach der Kostenaufstellung |
+| Prüfung, Meine Eingaben | Markierung „Gutschrift" an eingereichten Positionen |
+
+**Erkennung per OCR.** Das Rechnungsmodell von Azure unterscheidet Rechnung und Gutschrift
+nicht – die Anwendung wertet dazu das Ergebnis aus (`src/lib/ocr/document-kind.ts`). Sicher
+ist eine Gutschrift, wenn der Gesamtbetrag negativ ist oder der Beleg im Kopf als *Gutschrift*,
+*Rechnungskorrektur*, *Stornorechnung* oder *Credit Note* betitelt ist. Dann wird der
+Dokumenttyp von „Rechnung" auf „Gutschrift" gestellt, und die Beträge werden negativ geführt –
+auch wenn der Aussteller sie positiv druckt („Gutschrift über € 60,00"). Kommt der Begriff nur
+irgendwo im Text vor (z. B. „abzüglich Gutschrift" als Position einer Rechnung), bleibt es bei
+der Rechnung, mit einem Hinweis zum Prüfen. Einen von Hand zurückgestellten Dokumenttyp ändert
+ein erneutes Auslesen nicht mehr.
+
+Von Hand entsteht eine Gutschrift wie bisher: Betrag mit Minus eintragen (z. B. `-50,00`).
+
+## Automatische Kostenart
+
+Nach dem Auslesen schlägt die Anwendung für jeden Beleg eine Kostenart vor
+(`src/lib/ocr/category-suggestion.ts`, geladen in `src/services/classification.service.ts`):
+
+1. **Bisherige Zuordnungen.** Wurde der Rechnungssteller bisher (fast) immer derselben Kostenart
+   zugeordnet, gilt diese. Gelernt wird aus dem, was offiziell zählt: freigegebene
+   Kostenpositionen, aktive Vorlagen für wiederkehrende Kosten und freigegebene Belege ohne
+   Kostenposition – Eingereichtes und Abgelehntes zählt nicht. Schreibweisen werden
+   angeglichen („Muster GmbH & Co KG" = „MUSTER"). Jede gespeicherte Position ist damit zugleich
+   die Vorlage für den nächsten Beleg desselben Rechnungsstellers.
+2. **Mehrere bisherige Kostenarten** (z. B. „Gemeinde": Kanal, Müll, Grundsteuer): der Inhalt
+   des Belegs entscheidet zwischen ihnen.
+3. **Stichwörter** in Rechnungssteller, Beschreibung und Text: der Name der Kostenart und
+   verwandte Begriffe („Kehrung" → *Rauchfangkehrer*, „Polizze" → *Gebäudeversicherung*).
+   Eigene Kostenarten lassen sich über ihre **Beschreibung** in den Stammdaten mit weiteren
+   Stichwörtern versehen.
+
+Zugeordnet wird nur, wenn die Auswertung sicher ist (ab 70 %, `CATEGORY_AUTO_ASSIGN_CONFIDENCE`):
+im Kostenformular ist die Kostenart dann vorgewählt, am Dokument eingetragen – jeweils mit
+Begründung. **Bei unsicherer Zuordnung bleibt die Auswahl offen**: im Kostenformular steht
+„Bitte wählen …" (gespeichert wird erst mit einer Kostenart), am Dokument „Offen – noch nicht
+zugeordnet", mit den Kandidaten als Hinweis. Die Kostenart lässt sich immer von Hand ändern;
+was jemand gewählt hat, überschreibt die OCR nicht – auch nicht bei erneutem Auslesen. Wird im
+Beleg gar keine Rechnung erkannt, bleibt das Kostenformular wie bei einer Erfassung von Hand.
+
+**Gespeichert** wird alles in Neon: die Kostenart in `costs.category_id` bzw.
+`documents.category_id`, der Dokumenttyp in `documents.type`, und was die OCR erkannt und
+vorgeschlagen hat – Belegart mit Merkmalen, Kostenart mit Sicherheit und Begründung, weitere
+Kandidaten – unverändert in `documents.ocr_result.classification`. Das Audit-Log hält beim
+Eintrag „Dokument per OCR ausgelesen" fest, was erkannt und was zugeordnet wurde
+(z. B. „Dokumenttyp: Rechnung → Gutschrift", „Kostenart: leer → Rauchfangkehrer").
+
+Die Auswertung läuft nur mit dem Recht `document:ocr` (Verwaltung) und nur für Belege – ein
+Vertrag oder Zahlungsnachweis bekommt weder Belegart noch Kostenart. Sie braucht keinen
+weiteren Dienst und keine weitere Konfiguration.
 
 ## Deployment auf Vercel
 
@@ -412,7 +500,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung, Abrechnungskonto |
+| `npm test` | Unit-Tests: Verteilung, Gutschriften und Nettokosten, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Erkennung von Gutschriften, Kostenart-Vorschlag, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung, Abrechnungskonto |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |
@@ -423,7 +511,8 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 Migration und Seed verwenden `DATABASE_URL_UNPOOLED`. Eine in der Shell gesetzte Variable
 hat Vorrang vor `.env.local` – so lässt sich das Ziel pro Aufruf wählen.
 
-Die End-to-End-Tests starten einen lokalen Nachbau der Azure-API (`e2e/mock-azure.mjs`) –
+Die End-to-End-Tests starten einen lokalen Nachbau der Azure-API (`e2e/mock-azure.mjs`, mit
+festen Ergebnissen für Rechnung, Gutschrift und einen Beleg ohne erkennbare Kostenart) –
 sie brauchen keine Azure-Zugangsdaten und schicken keine Dokumente an Azure, auch wenn in
 `.env.local` echte Zugangsdaten stehen. Sie laufen im Chromium von Playwright
 (`npx playwright install chromium`); `PW_CHANNEL=chrome` nimmt ein installiertes Google Chrome.

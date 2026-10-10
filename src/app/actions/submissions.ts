@@ -8,6 +8,7 @@ import { runAction } from "@/lib/action";
 import type { ActionState } from "@/lib/action-state";
 import { DomainError } from "@/lib/errors";
 import { formToObject } from "@/lib/form-data";
+import { receiptTypeOf } from "@/lib/labels";
 import { readUpload } from "@/lib/upload";
 import {
   costSubmissionSchema,
@@ -35,6 +36,7 @@ import type { SessionUser } from "@/types/auth";
 const NO_INVOICE_DATA = {
   description: null,
   unitId: null,
+  categoryId: null,
   documentDate: null,
   supplier: null,
   invoiceNumber: null,
@@ -94,7 +96,9 @@ export async function submitCostAction(formData: FormData): Promise<ActionState>
         file,
         {
           ...NO_INVOICE_DATA,
-          type: "invoice",
+          // Der Beleg zu einer Gutschrift (negativer Betrag) ist eine Gutschrift.
+          type: receiptTypeOf(input.amount),
+          categoryId: input.categoryId,
           costIds: [costId],
           paymentId: null,
           documentDate: input.costDate,
@@ -124,7 +128,8 @@ export async function updateOwnCostAction(costId: number, formData: FormData): P
         file,
         {
           ...NO_INVOICE_DATA,
-          type: "invoice",
+          type: receiptTypeOf(input.amount),
+          categoryId: input.categoryId,
           costIds: [id],
           paymentId: null,
           documentDate: input.costDate,

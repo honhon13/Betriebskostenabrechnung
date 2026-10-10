@@ -12,7 +12,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
-import { formatCents } from "@/lib/format";
+import { formatCents, formatCredit } from "@/lib/format";
 import { listUnits } from "@/services/masterdata.service";
 import { getYearOverview, type YearSummary } from "@/services/overview.service";
 
@@ -42,8 +42,27 @@ export default async function BillingIndexPage() {
     { key: "status", header: "Status", cell: (y) => <PeriodStatusBadge status={y.period.status} /> },
     { key: "count", header: "Positionen", align: "right", cell: (y) => y.costCount },
     {
+      key: "costs",
+      header: "Kosten",
+      align: "right",
+      cell: (y) => formatCents(y.costBeforeCreditsCents),
+    },
+    {
+      key: "credits",
+      header: "Gutschriften",
+      align: "right",
+      cell: (y) => (
+        <>
+          {formatCredit(y.creditCents)}
+          {y.creditCount > 0 ? (
+            <span className="ml-1 text-xs text-muted">({y.creditCount})</span>
+          ) : null}
+        </>
+      ),
+    },
+    {
       key: "cost",
-      header: own ? "Mein Kostenanteil" : "Gesamtkosten",
+      header: own ? "Mein Kostenanteil" : "Nettokosten",
       align: "right",
       cell: (y) => formatCents(y.costCents),
     },
@@ -99,7 +118,7 @@ export default async function BillingIndexPage() {
           <>
             <CardHeader
               title="Jahresübersicht"
-              description="Einzahlungen minus Kosten = Guthaben bzw. Nachzahlung. Ein Klick auf das Jahr öffnet die Details."
+              description="Kosten abzüglich Gutschriften = Nettokosten; Einzahlungen minus Nettokosten = Guthaben bzw. Nachzahlung. Ein Klick auf das Jahr öffnet die Details."
             />
             <div className="pt-3">
               <DataTable

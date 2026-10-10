@@ -6,7 +6,7 @@ import { NavSelect } from "@/components/layout/year-select";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { NoAccess } from "@/components/ui/no-access";
 import type { MonthRow } from "@/lib/billing/monthly";
-import { formatCents } from "@/lib/format";
+import { formatCents, formatCredit } from "@/lib/format";
 import { MONTH_NAMES } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import { listUnits } from "@/services/masterdata.service";
@@ -43,6 +43,7 @@ export default async function MonthsPage({
         {label}
       </th>
       <td className={cell}>{formatCents(entry.costCents)}</td>
+      <td className={cell}>{formatCredit(entry.creditCents)}</td>
       <td className={cell}>{formatCents(entry.paymentCents)}</td>
       <td className={cell}>{signed(entry.differenceCents)}</td>
       <td className={cn(cell, "pr-4 font-medium sm:pr-5")}>{signed(entry.cumulativeCents)}</td>
@@ -54,7 +55,7 @@ export default async function MonthsPage({
       <Card>
         <CardHeader
           title={`Monatsübersicht ${period.year}`}
-          description={`${subject} · Kosten nach Rechnungsdatum, eingegangene Einzahlungen nach Zahlungsdatum.`}
+          description={`${subject} · Kosten nach Rechnungsdatum, eingegangene Einzahlungen nach Zahlungsdatum. Gutschriften stehen in einer eigenen Spalte.`}
           action={
             scope.allUnits ? (
               <NavSelect
@@ -73,8 +74,8 @@ export default async function MonthsPage({
           <MonthlyChart rows={overview.rows} />
         </CardContent>
         <div className="overflow-x-auto border-t border-border">
-          <table className="w-full min-w-[30rem] text-sm">
-            <caption className="sr-only">Kosten und Einzahlungen je Monat</caption>
+          <table className="w-full min-w-[36rem] text-sm">
+            <caption className="sr-only">Kosten, Gutschriften und Einzahlungen je Monat</caption>
             <thead>
               <tr className="border-b border-border text-xs text-muted">
                 <th scope="col" className="py-2.5 pr-3 pl-4 text-left font-medium sm:pl-5">
@@ -82,6 +83,9 @@ export default async function MonthsPage({
                 </th>
                 <th scope="col" className="px-3 py-2.5 text-right font-medium">
                   Kosten
+                </th>
+                <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                  Gutschriften
                 </th>
                 <th scope="col" className="px-3 py-2.5 text-right font-medium">
                   Einzahlungen
@@ -104,9 +108,13 @@ export default async function MonthsPage({
                   Jahr {period.year}
                 </th>
                 <td className={cell}>{formatCents(overview.totalCostCents)}</td>
+                <td className={cell}>{formatCredit(overview.totalCreditCents)}</td>
                 <td className={cell}>{formatCents(overview.totalPaymentCents)}</td>
                 <td className={cell}>
-                  {signed(overview.totalPaymentCents - overview.totalCostCents)}
+                  {signed(
+                    overview.totalPaymentCents -
+                      (overview.totalCostCents - overview.totalCreditCents),
+                  )}
                 </td>
                 <td className={cn(cell, "pr-4 sm:pr-5")} />
               </tr>
@@ -115,8 +123,8 @@ export default async function MonthsPage({
         </div>
       </Card>
       <p className="text-xs text-subtle">
-        Differenz = Einzahlungen minus Kosten. „Aufgelaufen“ ist der Stand seit Jahresbeginn: Plus
-        bedeutet Guthaben, Minus eine Unterdeckung.
+        Differenz = Einzahlungen minus Nettokosten (Kosten abzüglich Gutschriften). „Aufgelaufen“
+        ist der Stand seit Jahresbeginn: Plus bedeutet Guthaben, Minus eine Unterdeckung.
       </p>
     </div>
   );

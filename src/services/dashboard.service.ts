@@ -13,6 +13,9 @@ import { getStatement } from "./statement.service";
 const EMPTY_STATEMENT: Statement = {
   lines: [],
   balances: [],
+  costBeforeCreditsCents: 0,
+  creditCents: 0,
+  creditCount: 0,
   totalCostCents: 0,
   totalPaymentCents: 0,
   undistributedCents: 0,
@@ -21,10 +24,11 @@ const EMPTY_STATEMENT: Statement = {
 export interface CategoryTotal {
   categoryId: number;
   categoryName: string;
-  /** Gesamtbetrag der Kostenart (über alle beteiligten TOPs). */
-  totalCents: number;
-  /** Anteil der sichtbaren TOPs – für die Verwaltung identisch mit totalCents. */
-  shareCents: number;
+  /** Kosten der Kostenart im Sichtbereich – ohne Gutschriften. */
+  costCents: number;
+  /** Gutschriften der Kostenart im Sichtbereich, als positiver Betrag. */
+  creditCents: number;
+  creditCount: number;
 }
 
 /** Was im Abrechnungsjahr noch zu erledigen ist. */
@@ -41,7 +45,8 @@ export interface OpenItems {
 }
 
 export interface Activity {
-  kind: "cost" | "payment" | "document";
+  /** credit = Gutschrift: eine Kostenposition mit negativem Betrag. */
+  kind: "cost" | "credit" | "payment" | "document";
   id: number;
   title: string;
   detail: string;
@@ -52,14 +57,20 @@ export interface Activity {
 
 export interface DashboardData {
   period: PeriodDto;
-  /** Kosten im Sichtbereich: alle Kosten bzw. der Anteil der eigenen TOP. */
+  /** Kostenpositionen im Sichtbereich – ohne Gutschriften: alle Kosten bzw. der Anteil der eigenen TOP. */
+  costBeforeCreditsCents: number;
+  /** Gutschriften im Sichtbereich, als positiver Betrag. */
+  creditCents: number;
+  /** Nettokosten: Kosten minus Gutschriften. */
   costCents: number;
   paymentCents: number;
-  /** Einzahlungen minus Kosten: positiv = Guthaben, negativ = Nachzahlung. */
+  /** Einzahlungen minus Nettokosten: positiv = Guthaben, negativ = Nachzahlung. */
   balanceCents: number;
   balances: UnitBalance[];
   categories: CategoryTotal[];
+  /** Anzahl der Kostenpositionen – Gutschriften zählen eigens. */
   costCount: number;
+  creditCount: number;
   documentCount: number;
   openItems: OpenItems;
   activities: Activity[];
@@ -87,15 +98,22 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
     const entry = categories.get(line.categoryId) ?? {
       categoryId: line.categoryId,
       categoryName: line.categoryName,
-      totalCents: 0,
-      shareCents: 0,
+      costCents: 0,
+      creditCents: 0,
+      creditCount: 0,
     };
-    entry.totalCents += line.amountCents;
     // Für die Verwaltung zählt der volle Betrag – auch solange Schlüsselwerte fehlen und die
     // Position noch nicht verteilt ist. Sonst stünde die Kostenart neben den Gesamtkosten mit € 0.
-    entry.shareCents += allUnits
+    const cents = allUnits
       ? line.amountCents
       : line.shares.reduce((acc, share) => acc + share.cents, 0);
+    // Gutschriften stehen je Kostenart neben den Kosten, nicht darin.
+    if (line.credit) {
+      entry.creditCents -= cents;
+      entry.creditCount += 1;
+    } else {
+      entry.costCents += cents;
+    }
     categories.set(line.categoryId, entry);
   }
 
@@ -107,7 +125,7 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
 
   const activities: Activity[] = [
     ...statement.lines.map((line) => ({
-      kind: "cost" as const,
+      kind: line.credit ? ("credit" as const) : ("cost" as const),
       id: line.costId,
       title: line.description,
       detail: line.categoryName,
@@ -136,12 +154,17 @@ export async function getDashboard(actor: SessionUser, periodId: number): Promis
 
   return {
     period,
+    costBeforeCreditsCents: totals.costBeforeCreditsCents,
+    creditCents: totals.creditCents,
     costCents: totals.costCents,
     paymentCents: totals.paymentCents,
     balanceCents: totals.balanceCents,
     balances: statement.balances,
-    categories: [...categories.values()].sort((a, b) => b.shareCents - a.shareCents),
-    costCount: statement.lines.length,
+    categories: [...categories.values()].sort(
+      (a, b) => b.costCents - a.costCents || b.creditCents - a.creditCents,
+    ),
+    costCount: statement.lines.length - statement.creditCount,
+    creditCount: statement.creditCount,
     documentCount: officialDocuments.length,
     openItems: {
       unitsWithBalanceDue: statement.balances.filter((balance) => balance.balanceCents < 0),

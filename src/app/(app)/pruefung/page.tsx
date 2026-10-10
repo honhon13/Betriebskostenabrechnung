@@ -8,6 +8,7 @@ import { deletePaymentAction } from "@/app/actions/payments";
 import { reviewAction } from "@/app/actions/review";
 import { requireUser } from "@/auth/current-user";
 import { can } from "@/auth/rbac";
+import { CreditBadge } from "@/components/billing/credit-badge";
 import { DocumentChips } from "@/components/documents/document-preview";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { ReviewBadge } from "@/components/review/review-badge";
@@ -84,7 +85,8 @@ export default async function ReviewPage({ searchParams }: PageProps<"/pruefung"
       header: "Art",
       cell: (item) => (
         <>
-          <Badge tone="primary">{KIND_LABELS[item.kind]}</Badge>
+          {/* Eine eingereichte Gutschrift ist eine Kostenposition mit negativem Betrag. */}
+          {item.credit ? <CreditBadge /> : <Badge tone="primary">{KIND_LABELS[item.kind]}</Badge>}
           <span className="mt-1 block text-xs text-muted">Jahr {item.year}</span>
         </>
       ),

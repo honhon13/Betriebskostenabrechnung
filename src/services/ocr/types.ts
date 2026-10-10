@@ -18,6 +18,11 @@ export interface OcrResult {
   model: string;
   /** Alle vom Anbieter gelieferten Felder mit erkanntem Text und Sicherheit. */
   raw: Record<string, OcrRawField>;
+  /**
+   * Volltext des Dokuments in Lesereihenfolge. Dient nur der Auswertung (Rechnung oder
+   * Gutschrift, Kostenart) und wird nicht mit dem Ergebnis gespeichert.
+   */
+  text?: string | null;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { formatCents, formatDate, formatDateTime, formatNumber } from "@/lib/format";
+import { formatCents, formatCredit, formatDate, formatDateTime, formatNumber } from "@/lib/format";
 import type { PeriodStatus, Statement, StatementLine } from "@/types/billing";
 
 import { PdfLayout, type TableColumn, type TableRow } from "./layout";
@@ -57,8 +57,10 @@ const shareOf = (line: StatementLine, unitId: number) =>
 
 /**
  * Erzeugt die Jahresabrechnung als druckbares PDF: Ergebnis, Kostenaufstellung nach Kostenart,
- * Einzahlungen und Belegübersicht. Rechnet nichts selbst – alle Beträge stammen aus der
- * Abrechnung (`buildStatement`), damit PDF und Oberfläche nie voneinander abweichen.
+ * Gutschriften, Einzahlungen und Belegübersicht. Gutschriften stehen nie zwischen den Kosten:
+ * sie haben ihren eigenen Abschnitt, und das Ergebnis weist Kosten, Gutschriften und Nettokosten
+ * getrennt aus. Rechnet nichts selbst – alle Beträge stammen aus der Abrechnung
+ * (`buildStatement`), damit PDF und Oberfläche nie voneinander abweichen.
  */
 export async function renderAnnualStatement(data: AnnualStatementData): Promise<Uint8Array> {
   const { statement, focus } = data;
@@ -92,24 +94,56 @@ export async function renderAnnualStatement(data: AnnualStatementData): Promise<
 
   // --- Ergebnis -----------------------------------------------------------
   pdf.heading("Ergebnis");
+  const costLines = statement.lines.filter((line) => !line.credit);
+  const creditLines = statement.lines.filter((line) => line.credit);
   const distributed = sum(statement.balances.map((balance) => balance.costCents));
+  const hasCredits = creditLines.length > 0;
+  const creditsLabel = `Gutschriften (${statement.creditCount})`;
+  // Mit Gutschriften steht die Kostenseite in einer eigenen Reihe: Kosten, Gutschriften, Nettokosten.
+  // Ohne sie genügt eine Reihe – die Position „Gutschriften (0)“ folgt als Zeile darunter.
+  const noCredits = () =>
+    pdf.muted(`${creditsLabel}: ${formatCredit(0)} – in diesem Abrechnungsjahr gibt es keine.`, {
+      gap: 8,
+    });
   if (focus) {
     const balance = statement.balances[0];
-    pdf.figures([
-      { label: "Kostenanteil", value: formatCents(balance?.costCents ?? 0) },
+    const net = { label: "Kostenanteil", value: formatCents(balance?.costCents ?? 0) };
+    const result = [
       { label: "Eingegangene Einzahlungen", value: formatCents(balance?.paymentCents ?? 0) },
       { label: "Ergebnis", value: describeBalance(balance?.balanceCents ?? 0), emphasis: true },
-    ]);
+    ];
+    if (hasCredits) {
+      pdf.figures([
+        { label: "Kosten (Anteil)", value: formatCents(balance?.costBeforeCreditsCents ?? 0) },
+        { label: `${creditsLabel}, Anteil`, value: formatCredit(balance?.creditCents ?? 0) },
+        { ...net, label: "Kostenanteil (Nettokosten)" },
+      ]);
+      pdf.figures(result);
+    } else {
+      pdf.figures([net, ...result]);
+      noCredits();
+    }
   } else {
-    pdf.figures([
-      { label: "Gesamtkosten", value: formatCents(statement.totalCostCents) },
+    const net = { label: "Nettokosten", value: formatCents(statement.totalCostCents) };
+    const result = [
       { label: "Eingegangene Einzahlungen", value: formatCents(statement.totalPaymentCents) },
       {
         label: "Differenz",
         value: describeBalance(statement.totalPaymentCents - statement.totalCostCents),
         emphasis: true,
       },
-    ]);
+    ];
+    if (hasCredits) {
+      pdf.figures([
+        { label: "Kosten", value: formatCents(statement.costBeforeCreditsCents) },
+        { label: creditsLabel, value: formatCredit(statement.creditCents) },
+        net,
+      ]);
+      pdf.figures(result);
+    } else {
+      pdf.figures([net, ...result]);
+      noCredits();
+    }
     pdf.table(
       [
         { header: "TOP", width: null },
@@ -145,108 +179,109 @@ export async function renderAnnualStatement(data: AnnualStatementData): Promise<
     );
   }
 
-  // --- Kostenaufstellung --------------------------------------------------
-  pdf.heading("Kostenaufstellung");
-  if (statement.lines.length === 0) {
-    pdf.muted("Für dieses Jahr gibt es keine freigegebenen Kostenpositionen.", { gap: 6 });
-  } else if (focus) {
+  // --- Kostenaufstellung und Gutschriften ---------------------------------
+  // Beide Abschnitte haben dieselben Spalten: je Position der Gesamtbetrag und die Anteile.
+  const amountOf = (lines: StatementLine[]) => sum(lines.map((line) => line.amountCents));
+  let columns: TableColumn[];
+  let positionRows: (lines: StatementLine[]) => TableRow[];
+  /** Summenzeile: Beschriftung, Gesamtbetrag und Anteil(e) der übergebenen Positionen. */
+  let totalCells: (label: string, lines: StatementLine[]) => TableRow["cells"];
+
+  if (focus) {
     const own = (line: StatementLine) => shareOf(line, focus.unitId);
-    const rows: TableRow[] = byCategory(statement.lines).flatMap((group) => [
-      { style: "group" as const, cells: [group.name, "", "", ""] },
-      ...group.lines.map((line) => {
-        const share = own(line);
-        return {
-          cells: [
-            { text: line.description, sub: line.costDate ? formatDate(line.costDate) : undefined },
-            {
-              text: line.keyName,
-              sub:
-                line.distributable && line.keyUnitLabel && share
-                  ? `${formatNumber(share.weight)} von ${formatNumber(line.totalWeight)} ${line.keyUnitLabel}`
-                  : undefined,
-            },
-            formatCents(line.amountCents),
-            formatCents(share?.cents ?? 0),
-          ],
-        };
-      }),
-      ...(group.lines.length > 1
-        ? [
-            {
-              style: "subtotal" as const,
-              cells: [
-                `Summe ${group.name}`,
-                "",
-                formatCents(sum(group.lines.map((line) => line.amountCents))),
-                formatCents(sum(group.lines.map((line) => own(line)?.cents ?? 0))),
-              ],
-            },
-          ]
-        : []),
-    ]);
-    pdf.table(
-      [
-        { header: "Position", width: null },
-        { header: "Umlageschlüssel", width: 125 },
-        { header: "Gesamt", width: AMOUNT, align: "right" },
-        { header: `Anteil ${focus.unitName}`, width: 84, align: "right" },
-      ],
-      [
-        ...rows,
-        {
-          style: "total",
-          cells: [
-            `Kostenanteil ${focus.unitName}`,
-            "",
-            formatCents(statement.totalCostCents),
-            formatCents(distributed),
-          ],
-        },
-      ],
-    );
+    const ownShare = (lines: StatementLine[]) => sum(lines.map((line) => own(line)?.cents ?? 0));
+    columns = [
+      { header: "Position", width: null },
+      { header: "Umlageschlüssel", width: 125 },
+      { header: "Gesamt", width: AMOUNT, align: "right" },
+      { header: `Anteil ${focus.unitName}`, width: 84, align: "right" },
+    ];
+    totalCells = (label, lines) => [
+      label,
+      "",
+      formatCents(amountOf(lines)),
+      formatCents(ownShare(lines)),
+    ];
+    positionRows = (lines) =>
+      byCategory(lines).flatMap((group) => [
+        { style: "group" as const, cells: [group.name, "", "", ""] },
+        ...group.lines.map((line) => {
+          const share = own(line);
+          return {
+            cells: [
+              { text: line.description, sub: line.costDate ? formatDate(line.costDate) : undefined },
+              {
+                text: line.keyName,
+                sub:
+                  line.distributable && line.keyUnitLabel && share
+                    ? `${formatNumber(share.weight)} von ${formatNumber(line.totalWeight)} ${line.keyUnitLabel}`
+                    : undefined,
+              },
+              formatCents(line.amountCents),
+              formatCents(share?.cents ?? 0),
+            ],
+          };
+        }),
+        ...(group.lines.length > 1
+          ? [{ style: "subtotal" as const, cells: totalCells(`Summe ${group.name}`, group.lines) }]
+          : []),
+      ]);
   } else {
-    const unitWidth = 64;
     const shares = (lines: StatementLine[]) =>
       units.map((unit) => formatCents(sum(lines.map((line) => shareOf(line, unit.id)?.cents ?? 0))));
-    const rows: TableRow[] = byCategory(statement.lines).flatMap((group) => [
-      { style: "group" as const, cells: [group.name] },
-      ...group.lines.map((line) => ({
-        cells: [
-          {
-            text: line.description,
-            sub: [line.costDate && formatDate(line.costDate), line.keyName].filter(Boolean).join(" · "),
-          },
-          formatCents(line.amountCents),
-          ...units.map((unit) => {
-            const share = shareOf(line, unit.id);
-            return share ? formatCents(share.cents) : "–";
-          }),
-        ],
-      })),
-      ...(group.lines.length > 1
-        ? [
-            {
-              style: "subtotal" as const,
-              cells: [
-                `Summe ${group.name}`,
-                formatCents(sum(group.lines.map((line) => line.amountCents))),
-                ...shares(group.lines),
-              ],
-            },
-          ]
-        : []),
-    ]);
-    const columns: TableColumn[] = [
+    columns = [
       { header: "Position", width: null },
       { header: "Gesamt", width: AMOUNT, align: "right" },
-      ...units.map((unit) => ({ header: unit.name, width: unitWidth, align: "right" as const })),
+      ...units.map((unit) => ({ header: unit.name, width: 64, align: "right" as const })),
     ];
+    totalCells = (label, lines) => [label, formatCents(amountOf(lines)), ...shares(lines)];
+    positionRows = (lines) =>
+      byCategory(lines).flatMap((group) => [
+        { style: "group" as const, cells: [group.name] },
+        ...group.lines.map((line) => ({
+          cells: [
+            {
+              text: line.description,
+              sub: [line.costDate && formatDate(line.costDate), line.keyName]
+                .filter(Boolean)
+                .join(" · "),
+            },
+            formatCents(line.amountCents),
+            ...units.map((unit) => {
+              const share = shareOf(line, unit.id);
+              return share ? formatCents(share.cents) : "–";
+            }),
+          ],
+        })),
+        ...(group.lines.length > 1
+          ? [{ style: "subtotal" as const, cells: totalCells(`Summe ${group.name}`, group.lines) }]
+          : []),
+      ]);
+  }
+  const netLabel = focus ? `Kostenanteil ${focus.unitName}` : "Nettokosten";
+
+  pdf.heading("Kostenaufstellung");
+  if (costLines.length === 0) {
+    pdf.muted("Für dieses Jahr gibt es keine freigegebenen Kostenpositionen.", { gap: 6 });
+  } else {
     pdf.table(columns, [
-      ...rows,
-      {
-        style: "total",
-        cells: ["Gesamtkosten", formatCents(statement.totalCostCents), ...shares(statement.lines)],
-      },
+      ...positionRows(costLines),
+      // Ohne Gutschriften sind die Kosten zugleich das Ergebnis der Aufstellung.
+      { style: "total", cells: totalCells(hasCredits ? "Summe Kosten" : netLabel, costLines) },
+    ]);
+  }
+
+  if (hasCredits) {
+    pdf.heading("Gutschriften");
+    pdf.muted(
+      "Gutschriften mindern die Kosten. Sie sind eigene Positionen – die Kostenpositionen oben bleiben unverändert.",
+      { gap: 4 },
+    );
+    pdf.table(columns, [
+      ...positionRows(creditLines),
+      { style: "subtotal", cells: totalCells("Summe Gutschriften", creditLines) },
+      { style: "subtotal", cells: totalCells("Summe Kosten", costLines) },
+      { style: "total", cells: totalCells(netLabel, statement.lines) },
     ]);
   }
 
@@ -302,7 +337,11 @@ export async function renderAnnualStatement(data: AnnualStatementData): Promise<
         cells: [
           {
             text: line.description,
-            sub: [line.categoryName, line.costDate && formatDate(line.costDate)]
+            sub: [
+              line.credit && "Gutschrift",
+              line.categoryName,
+              line.costDate && formatDate(line.costDate),
+            ]
               .filter(Boolean)
               .join(" · "),
           },
@@ -318,7 +357,8 @@ export async function renderAnnualStatement(data: AnnualStatementData): Promise<
   pdf.gap(4);
   pdf.muted(
     "Berücksichtigt sind ausschließlich freigegebene Kostenpositionen und eingegangene, freigegebene Einzahlungen. " +
-      "Guthaben bzw. Nachzahlung ergibt sich aus Einzahlungen minus Kostenanteil. " +
+      "Gutschriften mindern die Kosten: Nettokosten = Kosten minus Gutschriften. " +
+      "Guthaben bzw. Nachzahlung ergibt sich aus Einzahlungen minus Kostenanteil (Nettokosten). " +
       "Die Belege liegen in der Anwendung unter „Dokumente“.",
     { size: 7.5 },
   );

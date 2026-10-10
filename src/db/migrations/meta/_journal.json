@@ -64,6 +64,13 @@
       "when": 1791047131628,
       "tag": "0008_account_opening",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791628345724,
+      "tag": "0009_credit_notes",
+      "breakpoints": true
     }
   ]
 }

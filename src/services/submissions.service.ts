@@ -22,6 +22,7 @@ import { diffSnapshots, snapshotValues } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import { sanitizeFileName } from "@/lib/files";
 import { formatCents, formatDate } from "@/lib/format";
+import { isReceiptType } from "@/lib/labels";
 import type {
   CostSubmissionInput,
   DocumentMetaInput,
@@ -34,6 +35,7 @@ import type { DocumentDto, DocumentRef, PeriodDto, PeriodStatus, ReviewInfo } fr
 import { describeCost, describeDocument, describePayment } from "./audit-snapshots";
 import { recordAudit } from "./audit.service";
 import {
+  assertCategory,
   checkUpload,
   getDocumentRefs,
   listDocuments,
@@ -364,12 +366,15 @@ async function assertOwnTargets(
       throw new DomainError("Du kannst ein Dokument nur mit eigenen Einzahlungen dieses Jahres verknüpfen.");
     }
   }
+  await assertCategory(tx, meta.categoryId);
 }
 
 function documentColumns(meta: DocumentMetaInput) {
   return {
     type: meta.type,
     description: meta.description,
+    // Eine Kostenart haben nur Belege (Rechnung, Gutschrift).
+    categoryId: isReceiptType(meta.type) ? meta.categoryId : null,
     documentDate: meta.documentDate,
     supplier: meta.supplier,
     invoiceNumber: meta.invoiceNumber,

@@ -20,13 +20,14 @@ import { EmptyState } from "@/components/ui/page";
 import { documentUrl } from "@/lib/files";
 import { formatCents, formatDate, formatDateTime, formatFileSize } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS, DOCUMENT_TYPES } from "@/lib/labels";
+import { categoryNote, documentTypeNote } from "@/lib/ocr/classification-text";
 import {
   isOcrAvailable,
   listDocuments,
   listLinkOptions,
   type DocumentSort,
 } from "@/services/documents.service";
-import { listUnits } from "@/services/masterdata.service";
+import { listCategories, listUnits } from "@/services/masterdata.service";
 import type { SessionUser } from "@/types/auth";
 import type { DocumentDto, OcrFields, PeriodDto } from "@/types/billing";
 
@@ -109,14 +110,16 @@ export async function DocumentManager({
     ? units.find((u) => String(u.number) === param(searchParams, "top"))
     : undefined;
 
-  const [documents, linkOptions] = await Promise.all([
+  const [documents, linkOptions, categories] = await Promise.all([
     listDocuments(user, { periodId: period?.id, unitId: unit?.id, type, search, sort }),
     canWrite ? listLinkOptions(user) : { costs: [], payments: [] },
+    canWrite ? listCategories() : [],
   ]);
 
   const formOptions: DocumentFormOptions = {
     periods: periods.map((p) => ({ id: p.id, year: p.year })),
     units,
+    categories,
     ...linkOptions,
   };
   const filtered = Boolean(search || type || unit || (!lockedPeriod && period) || sort !== "newest");
@@ -160,10 +163,14 @@ export async function DocumentManager({
       header: "Zuordnung",
       cell: (document) => {
         const empty =
-          document.costs.length === 0 && document.payments.length === 0 && !document.unitName;
+          document.costs.length === 0 &&
+          document.payments.length === 0 &&
+          !document.unitName &&
+          !document.categoryName;
         if (empty) return <span className="text-subtle">Nicht zugeordnet</span>;
         return (
           <ul className="space-y-0.5">
+            {document.categoryName ? <li>Kostenart: {document.categoryName}</li> : null}
             {document.costs.map((cost) => (
               <li key={`c${cost.id}`}>
                 <Link href={costHref(document, cost.id)} className="underline-offset-4 hover:underline">
@@ -390,6 +397,16 @@ export async function DocumentManager({
                       ) : document.ocr ? (
                         <Alert tone="info" title="Von OCR erkannt">
                           {describeOcr(document.ocr)}
+                          {document.classification ? (
+                            <span className="mt-1 block">
+                              {[
+                                documentTypeNote(document.classification),
+                                categoryNote(document.classification, false),
+                              ]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </span>
+                          ) : null}
                         </Alert>
                       ) : null}
                       <DocumentFields

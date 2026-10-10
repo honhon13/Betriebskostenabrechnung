@@ -64,6 +64,7 @@ const documentMeta = {
   type: "invoice" as const,
   description: null,
   unitId: null,
+  categoryId: null,
   costIds: [1],
   paymentId: null,
   documentDate: null,

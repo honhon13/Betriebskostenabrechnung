@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 
 import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 
-import { authorize, authorizeGlobalWrite, getDataScope, seesUnreviewed } from "@/auth/rbac";
+import { authorize, authorizeGlobalWrite, can, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb, type DbExecutor } from "@/db/client";
 import {
   billingPeriods,
@@ -17,7 +17,7 @@ import {
   payments,
   units,
 } from "@/db/schema";
-import { diffSnapshots, snapshotValues, type AuditSnapshot } from "@/lib/audit";
+import { diffSnapshots, snapshotValues, type AuditChange, type AuditSnapshot } from "@/lib/audit";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import {
   ALLOWED_FILE_TYPES,
@@ -26,6 +26,13 @@ import {
   sanitizeFileName,
 } from "@/lib/files";
 import { formatCents, formatDate, formatFileSize } from "@/lib/format";
+import { DOCUMENT_TYPE_LABELS, isReceiptType, receiptTypeOf } from "@/lib/labels";
+import {
+  categoryNote,
+  documentTypeNote,
+  isCreditNoteDetected,
+} from "@/lib/ocr/classification-text";
+import { asCreditAmounts } from "@/lib/ocr/document-kind";
 import type { DocumentMetaInput } from "@/lib/validation";
 import type { SessionUser } from "@/types/auth";
 import type {
@@ -33,16 +40,21 @@ import type {
   DocumentLinkRef,
   DocumentRef,
   DocumentType,
+  OcrClassification,
   OcrFields,
   OcrOutcome,
 } from "@/types/billing";
 
 import { describeDocument } from "./audit-snapshots";
 import { recordAudit } from "./audit.service";
+import { classifyReceipt } from "./classification.service";
 import { getOcrService, OcrError, type OcrResult } from "./ocr";
 import { getVisiblePeriod } from "./periods.service";
 
 type DocumentRow = typeof documents.$inferSelect;
+
+/** So liegt ein OCR-Ergebnis in `documents.ocr_result`: ohne Volltext, mit der Auswertung. */
+type StoredOcrResult = Omit<OcrResult, "text"> & { classification?: OcrClassification | null };
 
 // ---------------------------------------------------------------------------
 // Sichtbarkeit
@@ -211,19 +223,22 @@ const EMPTY_OCR_FIELDS: OcrFields = {
 
 function toDto(
   row: DocumentRow,
-  year: number,
-  unitName: string | null,
+  names: { year: number; unitName: string | null; categoryName: string | null },
   links: { costs: DocumentLinkRef[]; payments: DocumentLinkRef[] },
+  /** Die Auswertung der OCR ist ein Arbeitsstand der Verwaltung. */
+  withClassification: boolean,
 ): DocumentDto {
-  const stored = row.ocrResult as OcrResult | null;
+  const stored = row.ocrResult as StoredOcrResult | null;
   return {
     id: row.id,
     periodId: row.periodId,
-    year,
+    year: names.year,
     type: row.type,
     description: row.description,
     unitId: row.unitId,
-    unitName,
+    unitName: names.unitName,
+    categoryId: row.categoryId,
+    categoryName: names.categoryName,
     fileName: row.fileName,
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
@@ -238,6 +253,7 @@ function toDto(
     ocrStatus: row.ocrStatus,
     // Ältere Ergebnisse kennen die neueren Felder noch nicht – fehlende gelten als nicht erkannt.
     ocr: stored ? { ...EMPTY_OCR_FIELDS, ...stored.fields } : null,
+    classification: withClassification ? (stored?.classification ?? null) : null,
     ocrError: row.ocrError,
     reviewStatus: row.reviewStatus,
     reviewedAt: row.reviewedAt?.toISOString() ?? null,
@@ -288,10 +304,16 @@ export async function listDocuments(
         : [desc(documents.createdAt), desc(documents.id)];
 
   const rows = await db
-    .select({ document: documents, year: billingPeriods.year, unitName: units.name })
+    .select({
+      document: documents,
+      year: billingPeriods.year,
+      unitName: units.name,
+      categoryName: costCategories.name,
+    })
     .from(documents)
     .innerJoin(billingPeriods, eq(billingPeriods.id, documents.periodId))
     .leftJoin(units, eq(units.id, documents.unitId))
+    .leftJoin(costCategories, eq(costCategories.id, documents.categoryId))
     .where(
       and(
         visibilityCondition(actor),
@@ -310,8 +332,9 @@ export async function listDocuments(
     actor,
     rows.map((row) => row.document.id),
   );
-  return rows.map(({ document, year, unitName }) =>
-    toDto(document, year, unitName, links.get(document.id)!),
+  const withClassification = can(actor, "document:ocr");
+  return rows.map(({ document, ...names }) =>
+    toDto(document, names, links.get(document.id)!, withClassification),
   );
 }
 
@@ -460,6 +483,18 @@ async function assertTargets(
     const [unit] = await tx.select({ id: units.id }).from(units).where(eq(units.id, meta.unitId)).limit(1);
     if (!unit) throw new DomainError("Die TOP wurde nicht gefunden.");
   }
+  await assertCategory(tx, meta.categoryId);
+}
+
+/** Die Kostenart eines Belegs muss existieren – die ID kommt vom Client. */
+export async function assertCategory(tx: DbExecutor, categoryId: number | null): Promise<void> {
+  if (categoryId === null) return;
+  const [category] = await tx
+    .select({ id: costCategories.id })
+    .from(costCategories)
+    .where(eq(costCategories.id, categoryId))
+    .limit(1);
+  if (!category) throw new DomainError("Die Kostenart wurde nicht gefunden.");
 }
 
 async function replaceLinks(tx: DbExecutor, documentId: number, meta: DocumentMetaInput) {
@@ -476,6 +511,8 @@ function toColumns(meta: DocumentMetaInput) {
     type: meta.type,
     description: meta.description,
     unitId: meta.unitId,
+    // Eine Kostenart haben nur Belege – ein Vertrag oder Zahlungsnachweis verliert sie.
+    categoryId: isReceiptType(meta.type) ? meta.categoryId : null,
     documentDate: meta.documentDate,
     supplier: meta.supplier,
     invoiceNumber: meta.invoiceNumber,
@@ -611,6 +648,8 @@ export async function updateDocument(
 
 /** Im Kostenformular geprüfte Rechnungsdaten – Beträge in Cent. */
 export interface ReviewedInvoiceData {
+  /** Kostenart der Kostenposition. */
+  categoryId: number;
   documentDate: string | null;
   supplier: string | null;
   invoiceNumber: string | null;
@@ -629,8 +668,9 @@ export interface ReviewedInvoiceData {
  * - Ein Beleg ohne andere Verknüpfung wandert ins Abrechnungsjahr der Kostenposition, falls das
  *   Jahr im Formular nach dem Upload geändert wurde.
  * - `reviewed`: Bei genau einem Beleg gelten die im Formular geprüften Rechnungsdaten auch für
- *   das Dokument – Kostenposition und Beleg widersprechen sich dann nicht. Was die OCR erkannt
- *   hat, bleibt in `ocr_result` unverändert stehen.
+ *   das Dokument – Kostenposition und Beleg widersprechen sich dann nicht: dieselbe Kostenart,
+ *   und der Dokumenttyp folgt dem Betrag (negativ = Gutschrift, sonst Rechnung). Was die OCR
+ *   erkannt hat, bleibt in `ocr_result` unverändert stehen.
  */
 export async function attachReceiptsToCost(
   actor: SessionUser,
@@ -656,6 +696,7 @@ export async function attachReceiptsToCost(
       .select({
         id: documents.id,
         periodId: documents.periodId,
+        type: documents.type,
         fileName: documents.fileName,
         sha256: documents.sha256,
       })
@@ -699,7 +740,18 @@ export async function attachReceiptsToCost(
       .onConflictDoNothing();
 
     if (reviewed && ids.length === 1) {
-      await tx.update(documents).set(reviewed).where(eq(documents.id, ids[0]));
+      // Nur ein Beleg bekommt Kostenart und Belegart der Position – ein Vertrag bleibt ein Vertrag.
+      const receipt = isReceiptType(rows[0].type);
+      await tx
+        .update(documents)
+        .set({
+          ...reviewed,
+          categoryId: receipt ? reviewed.categoryId : null,
+          ...(receipt && reviewed.amountCents !== null
+            ? { type: receiptTypeOf(reviewed.amountCents) }
+            : {}),
+        })
+        .where(eq(documents.id, ids[0]));
     }
 
     // Verknüpfung und übernommene Rechnungsdaten ändern die Belege – je Beleg ein Eintrag.
@@ -804,6 +856,11 @@ function ocrCandidates(fields: OcrFields) {
  * Führt die OCR für ein Dokument aus und übernimmt erkannte Werte in leere Formularfelder.
  * Bereits ausgefüllte Felder bleiben unangetastet, nicht Erkanntes bleibt leer.
  *
+ * Belege (Rechnung, Gutschrift) werden zusätzlich ausgewertet: Eine erkannte Gutschrift stellt
+ * den Dokumenttyp um und führt ihre Beträge negativ; die Kostenart wird zugeordnet, wenn die
+ * Auswertung sicher ist – sonst bleibt sie offen. Erkennung und Vorschlag stehen mit Begründung
+ * in `ocr_result.classification`, unabhängig davon, was später von Hand geändert wird.
+ *
  * Fehler der Texterkennung (nicht lesbar, Format nicht unterstützt, Dienst nicht erreichbar)
  * werden am Dokument gespeichert und als Ergebnis zurückgegeben statt geworfen – das Dokument
  * selbst ist davon unberührt und kann von Hand ergänzt oder später erneut ausgelesen werden.
@@ -830,7 +887,14 @@ export async function processDocumentOcr(
       .set({ ocrStatus: "failed", ocrError: error, ocrProcessedAt: new Date() })
       .where(eq(documents.id, documentId));
     await recordAudit(actor, { ...entry, details: { note: `Fehlgeschlagen: ${error}` } });
-    return { status: "failed", fields: null, filled: [], error };
+    return {
+      status: "failed",
+      fields: null,
+      filled: [],
+      classification: null,
+      categoryAssigned: false,
+      error,
+    };
   };
 
   if (!ocr.supports(document.mimeType)) {
@@ -854,34 +918,102 @@ export async function processDocumentOcr(
     return fail("Die OCR-Auswertung ist fehlgeschlagen. Bitte später erneut versuchen.");
   }
 
+  // Rechnung oder Gutschrift, und welche Kostenart? Nur für Belege – ein Vertrag oder ein
+  // Zahlungsnachweis hat weder das eine noch das andere. Scheitert die Auswertung, bleibt das
+  // Ausgelesene trotzdem erhalten.
+  let classification: OcrClassification | null = null;
+  if (isReceiptType(document.type)) {
+    try {
+      classification = await classifyReceipt(result, { excludeDocumentId: documentId });
+    } catch (error) {
+      console.error(`Auswertung des OCR-Ergebnisses für Dokument ${documentId} fehlgeschlagen:`, error);
+    }
+  }
+
+  // Den Dokumenttyp stellt die OCR nur von der Vorgabe „Rechnung“ auf „Gutschrift“ um – und nicht
+  // erneut, wenn ihn jemand nach einer früheren Erkennung von Hand zurückgestellt hat.
+  const previous = (document.ocrResult as StoredOcrResult | null)?.classification;
+  const becomesCreditNote =
+    isCreditNoteDetected(classification) &&
+    document.type === "invoice" &&
+    !isCreditNoteDetected(previous);
+  // Eine Gutschrift ist in der Anwendung immer ein negativer Betrag – wie auch immer der Aussteller ihn druckt.
+  const fields =
+    becomesCreditNote || document.type === "credit_note"
+      ? asCreditAmounts(result.fields)
+      : result.fields;
+
   // Nur leere Felder füllen: was jemand eingetragen hat, überschreibt die OCR nie.
-  const fillable = ocrCandidates(result.fields).filter(
+  const fillable = ocrCandidates(fields).filter(
     (candidate) => candidate.value !== null && document[candidate.column] === null,
   );
+  // Dasselbe gilt für die Kostenart – und zugeordnet wird nur, was sicher genug ist.
+  const assignedCategory =
+    classification?.categoryCertain && document.categoryId === null ? classification.category : null;
+
+  const stored: StoredOcrResult = {
+    provider: result.provider,
+    model: result.model,
+    fields,
+    raw: result.raw,
+    classification,
+  };
   await db
     .update(documents)
     .set({
       ...Object.fromEntries(fillable.map((candidate) => [candidate.column, candidate.value])),
+      ...(becomesCreditNote ? { type: "credit_note" as const } : {}),
+      ...(assignedCategory ? { categoryId: assignedCategory.categoryId } : {}),
       ocrStatus: "done",
-      ocrResult: result,
+      ocrResult: stored,
       ocrError: null,
       ocrProcessedAt: new Date(),
     })
     .where(eq(documents.id, documentId));
+
+  const changes: AuditChange[] = [
+    ...(becomesCreditNote
+      ? [
+          {
+            field: "Dokumenttyp",
+            from: DOCUMENT_TYPE_LABELS.invoice,
+            to: DOCUMENT_TYPE_LABELS.credit_note,
+          },
+        ]
+      : []),
+    ...(assignedCategory
+      ? [{ field: "Kostenart", from: null, to: assignedCategory.categoryName }]
+      : []),
+  ];
   await recordAudit(actor, {
     ...entry,
     details: {
-      note:
+      changes,
+      note: [
         fillable.length > 0
           ? `Übernommen: ${fillable.map((candidate) => candidate.label).join(", ")}.`
           : "Ausgelesen – keine Werte übernommen.",
+        ...(classification
+          ? [
+              documentTypeNote(classification),
+              categoryNote(classification, assignedCategory !== null),
+              assignedCategory === null && document.categoryId === null
+                ? "Die Kostenart bleibt offen."
+                : null,
+            ]
+          : []),
+      ]
+        .filter(Boolean)
+        .join(" "),
     },
   });
 
   return {
     status: "done",
-    fields: result.fields,
+    fields,
     filled: fillable.map((candidate) => candidate.label),
+    classification,
+    categoryAssigned: assignedCategory !== null,
     error: null,
   };
 }

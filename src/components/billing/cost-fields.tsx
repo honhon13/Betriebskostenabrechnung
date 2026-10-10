@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { ReceiptCapture, type ReceiptField } from "@/components/documents/receipt-capture";
 import { Field } from "@/components/forms/field";
@@ -8,7 +8,18 @@ import { Checkbox, fileInputClass, Input, Select, Textarea } from "@/components/
 import { MAX_UPLOAD_BYTES, UPLOAD_ACCEPT } from "@/lib/files";
 import { formatFileSize } from "@/lib/format";
 import { centsToInput } from "@/lib/money";
-import type { AllocationKeyDto, CategoryDto, CostDto, UnitDto } from "@/types/billing";
+import {
+  categoryNote,
+  documentTypeNote,
+  isCreditNoteDetected,
+} from "@/lib/ocr/classification-text";
+import type {
+  AllocationKeyDto,
+  CategoryDto,
+  CostDto,
+  OcrOutcome,
+  UnitDto,
+} from "@/types/billing";
 
 interface CostFieldsProps {
   /** Abrechnungsjahre, in denen noch erfasst werden darf (Entwürfe). */
@@ -66,10 +77,17 @@ const RECEIPT_FIELDS: ReceiptField[] = [
   { name: "amount", label: "Betrag (brutto)", from: (ocr) => centsToInput(ocr.amountCents) || null },
 ];
 
+/** Ein Betrag mit Minus ist eine Gutschrift. */
+const isCreditInput = (value: string | undefined) => /^\s*[-−]/.test(value ?? "");
+
 /**
  * Formularfelder einer Kostenposition: Beleg, Kostenart, Rechnungsdaten, Umlageschlüssel und
  * TOP-Zuordnung. Der Beleg-Upload steht immer ganz oben, vor den Eingabefeldern: die Verwaltung
  * fotografiert bzw. wählt den Beleg zuerst – erkannte Werte stehen dann schon in den Feldern.
+ *
+ * Aus dem ausgelesenen Beleg kommen auch Belegart und Kostenart: eine Gutschrift steht mit Minus
+ * im Betrag, und die Kostenart ist vorgewählt, wenn die Auswertung sicher ist. Ist sie es nicht,
+ * bleibt die Auswahl offen – gespeichert wird erst mit einer gewählten Kostenart.
  */
 export function CostFields({
   periods,
@@ -92,7 +110,59 @@ export function CostFields({
 
   const [keyId, setKeyId] = useState(cost?.allocationKeyId ?? defaultKeyOf(initialCategory));
   // Sobald der Schlüssel von Hand gewählt wurde, überschreibt ihn die Kostenart nicht mehr.
-  const [keyTouched, setKeyTouched] = useState(Boolean(cost));
+  // (Refs statt State: gelesen wird nur in Ereignissen – auch während ein Beleg noch hochlädt.)
+  const keyTouched = useRef(Boolean(cost));
+
+  // "" = offen: die OCR war sich nicht sicher, die Kostenart muss von Hand gewählt werden.
+  const [categoryId, setCategoryId] = useState<number | "">(initialCategory ?? "");
+  const [categoryHint, setCategoryHint] = useState<string | null>(null);
+  // Woher die Kostenart stammt: Vorgabe, von der OCR zugeordnet, offen gelassen oder von Hand
+  // gewählt. Was jemand gewählt hat – auch die Kostenart einer bestehenden Position –, bleibt.
+  const categorySource = useRef<"default" | "ocr" | "open" | "manual">(cost ? "manual" : "default");
+
+  const amount = useRef<HTMLInputElement>(null);
+  const [credit, setCredit] = useState((cost?.amountCents ?? 0) < 0);
+
+  function chooseCategory(id: number | "") {
+    setCategoryId(id);
+    if (id !== "" && !keyTouched.current) setKeyId(defaultKeyOf(id));
+  }
+
+  /** Belegart und Kostenart aus dem ausgelesenen Beleg übernehmen; Rückgabe = Hinweise am Beleg. */
+  function applyOcr({ classification }: OcrOutcome): string[] {
+    const creditAmount = isCreditInput(amount.current?.value);
+    setCredit(creditAmount);
+    if (!classification) return [];
+
+    const notes: string[] = [];
+    const typeNote = documentTypeNote(classification);
+    if (typeNote) {
+      // Der Betrag war schon eingetragen und bleibt stehen – das Vorzeichen muss dann jemand setzen.
+      const missingSign = isCreditNoteDetected(classification) && !creditAmount;
+      notes.push(missingSign ? `${typeNote} Bitte den Betrag mit Minus eintragen.` : typeNote);
+    }
+
+    const source = categorySource.current;
+    const { category } = classification;
+    const offered = category && categoryOptions.some((c) => c.id === category.categoryId);
+    if (source === "manual" || source === "ocr") return notes;
+    // Im Beleg wurde gar keine Rechnung erkannt: dann gibt es nichts zuzuordnen, und das Formular
+    // verhält sich wie bei einer Erfassung von Hand.
+    if (classification.documentType === null) return notes;
+    if (category && offered && classification.categoryCertain) {
+      categorySource.current = "ocr";
+      chooseCategory(category.categoryId);
+      setCategoryHint(`Automatisch zugeordnet – ${category.reason}. Bitte prüfen.`);
+      notes.push(`Kostenart: ${category.categoryName}.`);
+    } else {
+      categorySource.current = "open";
+      chooseCategory("");
+      setCategoryHint(`${categoryNote(classification, false)} Bitte die Kostenart wählen.`);
+      notes.push("Kostenart offen – bitte wählen.");
+    }
+    return notes;
+  }
+
   // Leistungszeitraum, Netto und MwSt. sind selten von Hand nötig – aufgeklappt, sobald es Werte gibt.
   const [detailsOpen, setDetailsOpen] = useState(
     Boolean(
@@ -114,6 +184,7 @@ export function CostFields({
           fields={RECEIPT_FIELDS}
           ocr={ocrAvailable}
           onRecognized={() => setDetailsOpen(true)}
+          onOcr={applyOcr}
         />
       ) : allowUpload ? (
         <Field
@@ -131,15 +202,18 @@ export function CostFields({
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
-        <Field label="Kostenart" name="categoryId">
+        <Field label="Kostenart" name="categoryId" hint={categoryHint ?? undefined}>
           <Select
             name="categoryId"
-            defaultValue={initialCategory}
+            value={categoryId}
             onChange={(event) => {
-              if (!keyTouched) setKeyId(defaultKeyOf(Number(event.target.value)));
+              categorySource.current = "manual";
+              setCategoryHint(null);
+              chooseCategory(event.target.value === "" ? "" : Number(event.target.value));
             }}
             required
           >
+            {categoryId === "" ? <option value="">Bitte wählen …</option> : null}
             {categoryOptions.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.name}
@@ -171,12 +245,22 @@ export function CostFields({
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Betrag (€)" name="amount" hint="Brutto. Gutschriften mit Minus, z. B. -50,00">
+        <Field
+          label="Betrag (€)"
+          name="amount"
+          hint={
+            credit
+              ? "Gutschrift: mindert die Nettokosten und wird in Dashboard und Auswertungen getrennt von den Kosten ausgewiesen."
+              : "Brutto. Gutschriften mit Minus, z. B. -50,00"
+          }
+        >
           <Input
+            ref={amount}
             name="amount"
             inputMode="decimal"
             placeholder="0,00"
             defaultValue={centsToInput(cost?.amountCents)}
+            onInput={(event) => setCredit(isCreditInput(event.currentTarget.value))}
             required
           />
         </Field>
@@ -248,7 +332,7 @@ export function CostFields({
             value={keyId}
             onChange={(event) => {
               setKeyId(Number(event.target.value));
-              setKeyTouched(true);
+              keyTouched.current = true;
             }}
             required
           >

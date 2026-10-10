@@ -264,7 +264,10 @@ export const costs = pgTable(
       .notNull()
       .references(() => costCategories.id, { onDelete: "restrict" }),
     description: text("description").notNull(),
-    /** Beträge immer in Cent, negative Werte = Gutschrift. */
+    /**
+     * Beträge immer in Cent, negative Werte = Gutschrift. Eine Gutschrift ist damit eine eigene
+     * Position: sie mindert die Nettokosten, die ursprüngliche Kostenposition bleibt unverändert.
+     */
     amountCents: integer("amount_cents").notNull(),
     costDate: date("cost_date", { mode: "string" }),
     supplier: text("supplier"),
@@ -388,6 +391,8 @@ export const accountOpeningBalances = pgTable("account_opening_balances", {
 
 export const documentType = pgEnum("document_type", [
   "invoice",
+  /** Gutschrift bzw. Rechnungskorrektur – gehört zu einer Kostenposition mit negativem Betrag. */
+  "credit_note",
   "payment_proof",
   "contract",
   "other",
@@ -406,6 +411,11 @@ export const documents = pgTable(
     description: text("description"),
     /** Optional: Dokument gehört zu genau einer TOP (z. B. ein Mietvertrag). */
     unitId: integer("unit_id").references(() => units.id, { onDelete: "set null" }),
+    /**
+     * Kostenart eines Belegs (Rechnung, Gutschrift): von der OCR-Auswertung zugeordnet, wenn sie
+     * sicher ist, sonst leer = offen. Von Hand jederzeit änderbar.
+     */
+    categoryId: integer("category_id").references(() => costCategories.id, { onDelete: "set null" }),
     // Nur Metadaten – der Dateiinhalt liegt in document_files.
     fileName: text("file_name").notNull(),
     mimeType: text("mime_type").notNull(),
@@ -423,7 +433,10 @@ export const documents = pgTable(
     amountCents: integer("amount_cents"),
     // none/pending = offen, done = verarbeitet, failed = Fehler (Grund in ocr_error).
     ocrStatus: ocrStatus("ocr_status").notNull().default("none"),
-    /** Vollständiges OCR-Ergebnis: erkannte Werte, Anbieter, Modell und Rohfelder. */
+    /**
+     * Vollständiges OCR-Ergebnis: erkannte Werte, Anbieter, Modell, Rohfelder und die Auswertung
+     * (`classification`: erkannte Belegart, vorgeschlagene Kostenart mit Begründung).
+     */
     ocrResult: jsonb("ocr_result"),
     ocrError: text("ocr_error"),
     ocrProcessedAt: timestamp("ocr_processed_at", { withTimezone: true }),
@@ -436,6 +449,7 @@ export const documents = pgTable(
   (t) => [
     index("documents_period_idx").on(t.periodId),
     index("documents_unit_idx").on(t.unitId),
+    index("documents_category_idx").on(t.categoryId),
   ],
 );
 
@@ -555,6 +569,10 @@ export const paymentsRelations = relations(payments, ({ one }) => ({
 export const documentsRelations = relations(documents, ({ one, many }) => ({
   period: one(billingPeriods, { fields: [documents.periodId], references: [billingPeriods.id] }),
   unit: one(units, { fields: [documents.unitId], references: [units.id] }),
+  category: one(costCategories, {
+    fields: [documents.categoryId],
+    references: [costCategories.id],
+  }),
   links: many(documentLinks),
 }));
 

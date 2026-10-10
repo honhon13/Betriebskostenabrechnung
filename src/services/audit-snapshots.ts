@@ -19,6 +19,7 @@ import {
   users,
 } from "@/db/schema";
 import type { AuditSnapshot } from "@/lib/audit";
+import { isCredit } from "@/lib/billing/allocation";
 import { formatCents, formatDate } from "@/lib/format";
 import {
   DOCUMENT_TYPE_LABELS,
@@ -77,6 +78,8 @@ export async function describeCost(executor: DbExecutor, costId: number): Promis
     summary: `${cost.description} · ${formatCents(cost.amountCents)} · ${year}`,
     snapshot: {
       Abrechnungsjahr: String(year),
+      // Wechselt das Vorzeichen des Betrags, wird aus Kosten eine Gutschrift – das soll im Protokoll stehen.
+      "Art der Position": isCredit(cost.amountCents) ? "Gutschrift" : "Kosten",
       Kostenart: categoryName,
       Beschreibung: cost.description,
       Betrag: formatCents(cost.amountCents),
@@ -128,10 +131,16 @@ export async function describeDocument(
   documentId: number,
 ): Promise<Described | null> {
   const [row] = await executor
-    .select({ document: documents, year: billingPeriods.year, unitName: units.name })
+    .select({
+      document: documents,
+      year: billingPeriods.year,
+      unitName: units.name,
+      categoryName: costCategories.name,
+    })
     .from(documents)
     .innerJoin(billingPeriods, eq(billingPeriods.id, documents.periodId))
     .leftJoin(units, eq(units.id, documents.unitId))
+    .leftJoin(costCategories, eq(costCategories.id, documents.categoryId))
     .where(eq(documents.id, documentId))
     .limit(1);
   if (!row) return null;
@@ -148,7 +157,7 @@ export async function describeDocument(
     .where(eq(documentLinks.documentId, documentId))
     .orderBy(asc(documentLinks.id));
 
-  const { document, year, unitName } = row;
+  const { document, year, unitName, categoryName } = row;
   const payment = links.find((link) => link.paymentDate !== null);
   return {
     summary: `${document.fileName} · ${DOCUMENT_TYPE_LABELS[document.type]} · ${year}`,
@@ -158,6 +167,7 @@ export async function describeDocument(
       Datei: document.fileName,
       Beschreibung: document.description,
       TOP: unitName,
+      Kostenart: categoryName,
       Rechnungssteller: document.supplier,
       Rechnungsnummer: document.invoiceNumber,
       Rechnungsdatum: date(document.documentDate),

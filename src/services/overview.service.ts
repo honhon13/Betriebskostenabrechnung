@@ -13,6 +13,7 @@ import { getStatement } from "./statement.service";
 
 export interface YearSummary extends StatementTotals {
   period: PeriodDto;
+  /** Anzahl der Kostenpositionen – Gutschriften zählen eigens (`creditCount`). */
   costCount: number;
 }
 
@@ -30,7 +31,7 @@ export async function getYearOverview(actor: SessionUser): Promise<YearSummary[]
       const statement = await getStatement(actor, period.id);
       return {
         period,
-        costCount: statement.lines.length,
+        costCount: statement.lines.length - statement.creditCount,
         ...summarizeStatement(statement, allUnits),
       };
     }),
@@ -82,6 +83,7 @@ export async function getMonthlyOverview(
  * Kostenverlauf fürs Dashboard: mit einem Jahr die Monate dieses Abrechnungsjahres, ohne
  * die Entwicklung über alle sichtbaren Jahre. Gerechnet wird aus der Abrechnung – es zählen
  * also nur freigegebene Einträge, und ohne Blick auf alle TOPs nur der eigene Anteil.
+ * Gutschriften stehen je Zeitabschnitt neben den Kosten, nicht darin.
  */
 export async function getCostTrend(actor: SessionUser, period: PeriodDto | null): Promise<CostTrend> {
   authorize(actor, "cost:read");

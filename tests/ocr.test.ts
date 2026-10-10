@@ -6,6 +6,7 @@ import {
   mapInvoiceFields,
   mapRawFields,
 } from "@/services/ocr/azure-document-intelligence";
+import { asCreditAmounts, detectDocumentKind } from "@/lib/ocr/document-kind";
 import { OcrError } from "@/services/ocr/types";
 
 const currency = (amount: number, confidence = 0.9) => ({
@@ -198,6 +199,49 @@ describe("AzureDocumentIntelligenceOcrService", () => {
     stubFetch(accepted(), json({ status: "succeeded", analyzeResult: { documents: [] } }));
     const result = await service.analyzeInvoice(document);
     expect(Object.values(result.fields).every((value) => value === null)).toBe(true);
+    expect(result.text).toBeNull();
+  });
+
+  it("reicht den erkannten Volltext für die Auswertung durch – begrenzt auf den Anfang", async () => {
+    const content = "Rauchfangkehrer Muster GmbH\nGutschrift Nr. GS-2026-0007\nBetrag 60,00";
+    stubFetch(
+      accepted(),
+      json({ status: "succeeded", analyzeResult: { content, documents: [{ fields: invoiceFields }] } }),
+    );
+    expect((await service.analyzeInvoice(document)).text).toBe(content);
+
+    stubFetch(accepted(), json({ status: "succeeded", analyzeResult: { content: "x".repeat(50_000) } }));
+    expect((await service.analyzeInvoice(document)).text).toHaveLength(20_000);
+  });
+
+  it("erkennt eine Gutschrift aus dem Ergebnis des Dienstes und führt ihre Beträge negativ", async () => {
+    // So liefert es das Rechnungsmodell für eine Gutschrift: positive Beträge, der Titel nur im Text.
+    stubFetch(
+      accepted(),
+      json({
+        status: "succeeded",
+        analyzeResult: {
+          content: "Rauchfangkehrer Muster GmbH\nGUTSCHRIFT\nNr. GS-2026-0007\nPos Bezeichnung Betrag\n1 Abgasmessung 60,00",
+          documents: [{ fields: { ...invoiceFields, InvoiceTotal: currency(60), SubTotal: currency(50), TotalTax: currency(10) } }],
+        },
+      }),
+    );
+    const result = await service.analyzeInvoice(document);
+    expect(result.fields.amountCents).toBe(60_00);
+
+    const kind = detectDocumentKind({ fields: result.fields, text: result.text ?? null });
+    expect(kind).toEqual({ documentType: "credit_note", certain: true, signals: ["Titel „Gutschrift“"] });
+    expect(asCreditAmounts(result.fields)).toMatchObject({
+      netAmountCents: -50_00,
+      taxAmountCents: -10_00,
+      amountCents: -60_00,
+    });
+  });
+
+  it("übernimmt einen negativen Gesamtbetrag des Dienstes unverändert", () => {
+    const fields = mapInvoiceFields({ InvoiceTotal: currency(-123.45) });
+    expect(fields.amountCents).toBe(-123_45);
+    expect(detectDocumentKind({ fields, text: null }).documentType).toBe("credit_note");
   });
 
   it("verwendet Modell und API-Version aus der Umgebung", async () => {

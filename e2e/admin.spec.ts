@@ -43,7 +43,10 @@ test.describe.serial("ADMIN (TOP 2)", () => {
 
   test("Dashboard zeigt Kennzahlen aller TOPs", async () => {
     await page.goto(`/dashboard?jahr=${RELEASED_YEAR}`);
-    await expect(page.getByText("Gesamtkosten")).toBeVisible();
+    // Die Kostenseite steht getrennt da: Kosten, Gutschriften, Nettokosten.
+    for (const label of ["Kosten", "Gutschriften", "Nettokosten"]) {
+      await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
+    }
     await expect(page.getByText("Einzahlungen gesamt")).toBeVisible();
     await expect(page.getByText(`Abrechnungsjahr ${RELEASED_YEAR}`).first()).toBeVisible();
     // Auf dem Dashboard steht auch das Abrechnungskonto je TOP – hier geht es um die Abrechnung.
@@ -79,7 +82,7 @@ test.describe.serial("ADMIN (TOP 2)", () => {
 
   test("Kostenverteilung geht ohne Rundungsdifferenz auf", async () => {
     await page.goto(`/abrechnung/${RELEASED_YEAR}`);
-    const cells = await row(page, "Kosten gesamt").getByRole("cell").allTextContents();
+    const cells = await row(page, "Nettokosten").getByRole("cell").allTextContents();
     const [total, , ...shares] = cells.map(parseCents);
     expect(shares).toHaveLength(3);
     expect(shares.reduce((a, b) => a + b, 0)).toBe(total);
@@ -88,8 +91,10 @@ test.describe.serial("ADMIN (TOP 2)", () => {
 
   test("Abrechnung je TOP zeigt Kostenpositionen und Einzahlungen", async () => {
     await page.goto(`/abrechnung/${RELEASED_YEAR}`);
-    await expect(page.getByText("Gesamtkosten")).toBeVisible();
-    await expect(page.getByText("Gesamtzahlungen")).toBeVisible();
+    const totals = page.getByRole("region", { name: "Gesamt" });
+    for (const label of ["Kosten", "Gutschriften", "Nettokosten", "Gesamtzahlungen", "Differenz"]) {
+      await expect(totals.getByText(label, { exact: true })).toBeVisible();
+    }
 
     const top1 = page.locator("details").filter({ hasText: "TOP 1" }).first();
     await top1.locator("summary").click();
@@ -114,15 +119,19 @@ test.describe.serial("ADMIN (TOP 2)", () => {
     const months = await table.locator("tbody tr").all();
     let costs = 0;
     let payments = 0;
+    let credits = 0;
     for (const month of months) {
-      const [cost, payment] = (await month.getByRole("cell").allTextContents()).map(parseCents);
+      // Spalten: Kosten, Gutschriften, Einzahlungen, Differenz, Aufgelaufen.
+      const [cost, credit, payment] = (await month.getByRole("cell").allTextContents()).map(parseCents);
       costs += cost;
+      credits += credit;
       payments += payment;
     }
-    const [yearCost, yearPayments] = (
+    const [yearCost, yearCredits, yearPayments] = (
       await row(page, `Jahr ${RELEASED_YEAR}`).getByRole("cell").allTextContents()
     ).map(parseCents);
     expect(costs).toBe(yearCost);
+    expect(credits).toBe(yearCredits);
     expect(payments).toBe(yearPayments);
 
     // Sicht einer einzelnen TOP

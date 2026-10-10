@@ -6,6 +6,7 @@ import {
   CircleX,
   ClipboardCheck,
   Clock,
+  FileMinus,
   FileQuestion,
   FileText,
   Files,
@@ -13,6 +14,7 @@ import {
   PieChart,
   ReceiptText,
   Scale,
+  Sigma,
   TriangleAlert,
   Wallet,
   type LucideIcon,
@@ -36,7 +38,14 @@ import { ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
-import { formatCents, formatDate, formatDateTime, formatPercent } from "@/lib/format";
+import {
+  creditCountLabel,
+  formatCents,
+  formatCredit,
+  formatDate,
+  formatDateTime,
+  formatPercent,
+} from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
 import { getAccountOverview } from "@/services/account.service";
 import { getDashboard, type Activity } from "@/services/dashboard.service";
@@ -48,12 +57,14 @@ export const metadata: Metadata = { title: "Dashboard" };
 
 const ACTIVITY_ICON: Record<Activity["kind"], LucideIcon> = {
   cost: ReceiptText,
+  credit: FileMinus,
   payment: Wallet,
   document: FileText,
 };
 
 const ACTIVITY_LABEL: Record<Activity["kind"], string> = {
   cost: "Kosten erfasst",
+  credit: "Gutschrift erfasst",
   payment: "Einzahlung erfasst",
   document: "Dokument hochgeladen",
 };
@@ -201,7 +212,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
   ];
 
   const activityHref = (activity: Activity) =>
-    activity.kind === "cost"
+    activity.kind === "cost" || activity.kind === "credit"
       ? own
         ? `/abrechnung/${year}?position=${activity.id}`
         : `/abrechnung/${year}/kosten?position=${activity.id}`
@@ -239,8 +250,9 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             </p>
             <p className="text-sm text-muted">
               {formatDate(period.startDate)} – {formatDate(period.endDate)} · {data.costCount}{" "}
-              {data.costCount === 1 ? "Kostenposition" : "Kostenpositionen"} · {data.documentCount}{" "}
-              {data.documentCount === 1 ? "Dokument" : "Dokumente"}
+              {data.costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
+              {data.creditCount > 0 ? ` · ${creditCountLabel(data.creditCount)}` : ""} ·{" "}
+              {data.documentCount} {data.documentCount === 1 ? "Dokument" : "Dokumente"}
             </p>
           </div>
         </div>
@@ -250,13 +262,30 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         </ButtonLink>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {/* Oben die Kostenseite – Kosten, Gutschriften, Nettokosten –, darunter Zahlungen und Belege. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <StatTile
-          label={own ? "Mein Kostenanteil" : "Gesamtkosten"}
-          value={formatCents(data.costCents)}
+          label={own ? "Kosten (mein Anteil)" : "Kosten"}
+          value={formatCents(data.costBeforeCreditsCents)}
           icon={ReceiptText}
         >
-          {data.costCount} {data.costCount === 1 ? "Position" : "Positionen"}
+          {data.costCount} {data.costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
+        </StatTile>
+        <StatTile
+          label={own ? "Gutschriften (mein Anteil)" : "Gutschriften"}
+          value={formatCredit(data.creditCents)}
+          icon={FileMinus}
+        >
+          {data.creditCount === 0
+            ? "Keine Gutschriften"
+            : `${creditCountLabel(data.creditCount)} – ${data.creditCount === 1 ? "mindert" : "mindern"} die Kosten`}
+        </StatTile>
+        <StatTile
+          label={own ? "Mein Kostenanteil" : "Nettokosten"}
+          value={formatCents(data.costCents)}
+          icon={Sigma}
+        >
+          Kosten abzüglich Gutschriften
         </StatTile>
         <StatTile
           label={own ? "Meine Einzahlungen" : "Einzahlungen gesamt"}
@@ -264,7 +293,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           icon={Wallet}
         >
           {data.costCents > 0
-            ? `decken ${formatPercent(Math.max(data.paymentCents, 0) / data.costCents)} der Kosten`
+            ? `decken ${formatPercent(Math.max(data.paymentCents, 0) / data.costCents)} der ${own ? "Kosten" : "Nettokosten"}`
             : "eingegangen"}
         </StatTile>
         <StatTile
@@ -292,7 +321,9 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                 ? `Kosten je Monat im Abrechnungsjahr ${trendPeriod.year} (nach Rechnungsdatum)`
                 : "Kosten je Abrechnungsjahr") +
               (own ? " – dein Anteil." : " – gestapelt nach TOP.") +
-              ` Summe ${formatCents(trend.totalCents)}.`
+              (trend.creditCents > 0
+                ? ` Kosten ${formatCents(trend.costCents)}, Gutschriften ${formatCredit(trend.creditCents)}, Nettokosten ${formatCents(trend.totalCents)}.`
+                : ` Summe ${formatCents(trend.totalCents)}.`)
             }
             action={
               <NavSelect
@@ -307,7 +338,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             }
           />
           <CardContent>
-            {trend.totalCents === 0 ? (
+            {trend.costCents === 0 && trend.creditCents === 0 ? (
               <p className="text-sm text-muted">Für diesen Zeitraum sind noch keine Kosten erfasst.</p>
             ) : (
               <CostTrendChart trend={trend} singleLabel={own ? "Mein Kostenanteil" : "Kosten gesamt"} />
@@ -373,7 +404,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         <Card>
           <CardHeader
             title={own ? "Meine Abrechnung" : "Abrechnung je TOP"}
-            description="Einzahlungen minus Kostenanteil = Guthaben bzw. Nachzahlung."
+            description="Einzahlungen minus Nettokosten (Kosten abzüglich Gutschriften) = Guthaben bzw. Nachzahlung."
             action={
               <ButtonLink href={`/abrechnung/${year}`} variant="ghost" size="sm">
                 Details
@@ -387,14 +418,14 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           ) : (
             <div className="px-2 pt-2 pb-2 sm:px-3">
               <table className="w-full text-sm">
-                <caption className="sr-only">Kosten, Einzahlungen und Differenz je TOP</caption>
+                <caption className="sr-only">Nettokosten, Einzahlungen und Differenz je TOP</caption>
                 <thead>
                   <tr className="border-b border-border text-xs text-muted">
                     <th scope="col" className="px-2 py-2 text-left font-medium">
                       TOP
                     </th>
                     <th scope="col" className="px-2 py-2 text-right font-medium">
-                      Kosten
+                      Nettokosten
                     </th>
                     <th scope="col" className="px-2 py-2 text-right font-medium">
                       Einzahlungen
@@ -443,7 +474,10 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         <Card>
           <CardHeader
             title="Kosten nach Kostenart"
-            description={own ? "Dein Anteil je Kostenart." : "Summe je Kostenart über alle TOPs."}
+            description={
+              (own ? "Dein Anteil je Kostenart." : "Summe je Kostenart über alle TOPs.") +
+              (data.creditCount > 0 ? " Gutschriften stehen getrennt darunter." : "")
+            }
           />
           <CardContent>
             {data.categories.length === 0 ? (

@@ -9,6 +9,7 @@ import { runAction } from "@/lib/action";
 import type { ActionState } from "@/lib/action-state";
 import { DomainError } from "@/lib/errors";
 import { formToObject } from "@/lib/form-data";
+import { receiptTypeOf } from "@/lib/labels";
 import { readUpload } from "@/lib/upload";
 import {
   allocationValuesSchema,
@@ -67,8 +68,8 @@ export async function deletePeriodAction(periodId: number): Promise<ActionState>
 }
 
 /**
- * Hängt den im Kostenformular mitgeschickten Beleg als Rechnung an die Kostenposition und
- * liest ihn – wie beim Dokument-Upload – automatisch per OCR aus. Erkannte Werte ergänzen
+ * Hängt den im Kostenformular mitgeschickten Beleg als Rechnung – bei negativem Betrag als
+ * Gutschrift – an die Kostenposition und liest ihn – wie beim Dokument-Upload – automatisch per OCR aus. Erkannte Werte ergänzen
  * leere Felder des Dokuments und der Kostenposition; ein OCR-Fehler steht am Dokument und
  * lässt das Speichern nicht scheitern.
  */
@@ -81,9 +82,11 @@ async function attachInvoice(
   let documentId: number;
   try {
     documentId = await uploadDocument(actor, input.periodId, file, {
-      type: "invoice",
+      // Der Beleg zu einer Gutschrift (negativer Betrag) ist eine Gutschrift.
+      type: receiptTypeOf(input.amount),
       description: null,
       unitId: null,
+      categoryId: input.categoryId,
       costIds: [costId],
       paymentId: null,
       documentDate: input.costDate,
@@ -122,6 +125,7 @@ async function attachCapturedReceipts(
 ): Promise<void> {
   try {
     await attachReceiptsToCost(actor, costId, receiptIds, {
+      categoryId: input.categoryId,
       documentDate: input.costDate,
       supplier: input.supplier,
       invoiceNumber: input.invoiceNumber,

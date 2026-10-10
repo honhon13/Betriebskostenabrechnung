@@ -14,6 +14,7 @@ import {
   units,
   users,
 } from "@/db/schema";
+import { isCredit } from "@/lib/billing/allocation";
 import { DomainError, NotFoundError } from "@/lib/errors";
 import { formatDate } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS, REVIEW_STATUS_LABELS } from "@/lib/labels";
@@ -36,6 +37,8 @@ export interface ReviewItem {
   /** TOP, die der Eintrag betrifft (Einzahlungen, Dokumente) – sonst null. */
   unitName: string | null;
   amountCents: number | null;
+  /** Eingereichte Gutschrift: eine Kostenposition mit negativem Betrag. */
+  credit: boolean;
   submittedBy: string | null;
   submittedAt: string;
   reviewStatus: ReviewStatus;
@@ -136,6 +139,7 @@ export async function listReviewItems(
         year: row.year,
         unitName: null,
         amountCents: null,
+        credit: false,
         submittedBy,
         documents: [],
         ...common(row),
@@ -152,6 +156,7 @@ export async function listReviewItems(
         year,
         unitName: null,
         amountCents: row.amountCents,
+        credit: isCredit(row.amountCents),
         submittedBy,
         documents: costDocuments.get(row.id) ?? [],
         ...common(row),
@@ -166,6 +171,7 @@ export async function listReviewItems(
         year,
         unitName,
         amountCents: row.amountCents,
+        credit: false,
         submittedBy,
         documents: paymentDocuments.get(row.id) ?? [],
         ...common(row),
@@ -180,6 +186,7 @@ export async function listReviewItems(
         year,
         unitName,
         amountCents: row.amountCents,
+        credit: false,
         submittedBy,
         documents: [{ id: row.id, fileName: row.fileName, type: row.type, mimeType: row.mimeType }],
         ...common(row),

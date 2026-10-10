@@ -11,6 +11,8 @@ import { Checkbox, fileInputClass } from "@/components/ui/input";
 import { MAX_UPLOAD_BYTES, UPLOAD_ACCEPT } from "@/lib/files";
 import { formatFileSize } from "@/lib/format";
 import { shrinkImage } from "@/lib/image-resize";
+import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
+import { categoryNote, documentTypeNote } from "@/lib/ocr/classification-text";
 import type { DocumentDto, OcrOutcome } from "@/types/billing";
 
 import { ActionForm } from "../forms/action-form";
@@ -303,7 +305,8 @@ function DocumentUpload({
           </label>
           <p id="ocr-hint" className="mt-1 pl-6 text-xs text-muted">
             Rechnungssteller, Rechnungsnummer, Datum, Leistungszeitraum, Beträge und Beschreibung
-            werden erkannt und in leere Felder übernommen. Die Datei wird dazu an Azure Document
+            werden erkannt und in leere Felder übernommen; Gutschriften und die passende Kostenart
+            werden nach Möglichkeit automatisch zugeordnet. Die Datei wird dazu an Azure Document
             Intelligence übertragen.
           </p>
         </div>
@@ -379,6 +382,33 @@ function UploadLog({ entries, submission }: { entries: UploadEntry[]; submission
   );
 }
 
+/**
+ * Was die Auswertung des Belegs ergeben hat: Rechnung oder Gutschrift, und ob die Kostenart
+ * zugeordnet wurde oder offen geblieben ist – beides lässt sich im Formular darunter korrigieren.
+ */
+function ClassificationSummary({ ocr, document }: { ocr: OcrOutcome; document: DocumentDto }) {
+  const { classification } = ocr;
+  // Kein Beleg (z. B. ein Brief): es gibt weder Belegart noch Kostenart zu melden.
+  if (!classification || (classification.documentType === null && !classification.category)) {
+    return null;
+  }
+  const open = document.categoryId === null;
+  return (
+    <Alert
+      tone={open ? "warning" : "info"}
+      title={`Dokumenttyp: ${DOCUMENT_TYPE_LABELS[document.type]} · Kostenart: ${document.categoryName ?? "offen"}`}
+    >
+      {[
+        documentTypeNote(classification),
+        categoryNote(classification, ocr.categoryAssigned),
+        open ? "Bitte die Kostenart unten wählen oder vorerst offen lassen." : null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    </Alert>
+  );
+}
+
 /** Was die OCR nach dem Upload ergeben hat – verarbeitet, nichts erkannt oder Fehler. */
 function OcrSummary({ ocr }: { ocr: OcrOutcome }) {
   if (ocr.status === "failed") {
@@ -416,12 +446,14 @@ function DocumentReview({
   costs,
   payments,
   units,
+  categories,
   lockPeriod,
 }: DocumentUploadProps & { result: UploadResponse; onDone: () => void }) {
   return (
     <div className="space-y-4">
       <Alert tone="success" title={`„${result.document.fileName}“ wurde hochgeladen.`} />
       {result.ocr ? <OcrSummary ocr={result.ocr} /> : null}
+      {result.ocr ? <ClassificationSummary ocr={result.ocr} document={result.document} /> : null}
       <ActionForm
         action={updateDocumentAction.bind(null, result.document.id)}
         submitLabel="Speichern"
@@ -434,6 +466,7 @@ function DocumentReview({
           costs={costs}
           payments={payments}
           units={units}
+          categories={categories}
           lockPeriod={lockPeriod}
           defaultPeriodId={result.document.periodId}
           document={result.document}

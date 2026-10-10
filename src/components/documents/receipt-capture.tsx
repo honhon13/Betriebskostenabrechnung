@@ -35,6 +35,12 @@ interface ReceiptCaptureProps {
   periodField?: string;
   /** Wird aufgerufen, sobald erkannte Werte in Felder übernommen wurden. */
   onRecognized?: () => void;
+  /**
+   * Wird nach jedem ausgelesenen Beleg aufgerufen – die Felder sind dann schon gefüllt. Das
+   * Formular übernimmt daraus, was über einfache Felder hinausgeht (Gutschrift, Kostenart), und
+   * gibt zurück, was dazu beim Beleg stehen soll.
+   */
+  onOcr?: (outcome: OcrOutcome) => string[];
 }
 
 /** Antwort von POST /api/dokumente. */
@@ -83,6 +89,7 @@ export function ReceiptCapture({
   ocr,
   periodField = "periodId",
   onRecognized,
+  onOcr,
 }: ReceiptCaptureProps) {
   const lifecycle = use(FormLifecycleContext);
   const camera = useRef<HTMLInputElement>(null);
@@ -150,18 +157,24 @@ export function ReceiptCapture({
 
       const recognized = result.ocr.fields;
       const filled = fields.filter((field) => fillIfEmpty(form, field.name, field.from(recognized)));
+      // Erst danach: das Formular sieht die gefüllten Felder und ergänzt Gutschrift und Kostenart.
+      const evaluation = (onOcr?.(result.ocr) ?? []).join(" ");
       if (filled.length === 0) {
         return {
           ...base,
           tone: "warning",
-          note: "Ausgelesen – nichts übernommen: keine Rechnungsdaten erkannt oder die Felder waren bereits ausgefüllt.",
+          note:
+            "Ausgelesen – nichts übernommen: keine Rechnungsdaten erkannt oder die Felder waren bereits ausgefüllt." +
+            (evaluation ? ` ${evaluation}` : ""),
         };
       }
       onRecognized?.();
       return {
         ...base,
         tone: "success",
-        note: `Ausgelesen – übernommen: ${filled.map((field) => field.label).join(", ")}. Bitte prüfen.`,
+        note:
+          `Ausgelesen – übernommen: ${filled.map((field) => field.label).join(", ")}.` +
+          `${evaluation ? ` ${evaluation}` : ""} Bitte prüfen.`,
       };
     } catch {
       return failed("Nicht gespeichert: keine Verbindung zum Server.");
@@ -328,7 +341,8 @@ export function ReceiptCapture({
           </label>
           <p id={ocrHint} className="mt-1 pl-6 text-xs text-muted">
             Rechnungssteller, Rechnungsnummer, Datum, Leistungszeitraum, Beträge und Beschreibung
-            werden erkannt und in leere Felder übernommen. Die Datei wird dazu an Azure Document
+            werden erkannt und in leere Felder übernommen; Gutschriften und die passende Kostenart
+            werden nach Möglichkeit automatisch zugeordnet. Die Datei wird dazu an Azure Document
             Intelligence übertragen.
           </p>
         </div>

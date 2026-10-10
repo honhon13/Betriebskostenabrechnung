@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { Field } from "@/components/forms/field";
 import { Checkbox, Input, Select, Textarea } from "@/components/ui/input";
-import { DOCUMENT_TYPE_LABELS, DOCUMENT_TYPES } from "@/lib/labels";
+import { DOCUMENT_TYPE_LABELS, DOCUMENT_TYPES, isReceiptType } from "@/lib/labels";
+import { categoryNote } from "@/lib/ocr/classification-text";
 import { centsToInput } from "@/lib/money";
 import type { DocumentDto, DocumentType, UnitDto } from "@/types/billing";
 
@@ -21,6 +22,8 @@ export interface DocumentFormOptions {
   costs: LinkOption[];
   payments: LinkOption[];
   units: UnitDto[];
+  /** Kostenarten für Belege (Rechnung, Gutschrift). */
+  categories: { id: number; name: string; isActive: boolean }[];
 }
 
 interface DocumentFieldsProps extends DocumentFormOptions {
@@ -37,7 +40,8 @@ interface DocumentFieldsProps extends DocumentFormOptions {
 
 /**
  * Metadaten eines Dokuments: Typ, Abrechnungsjahr, Beschreibung und Verknüpfungen.
- * Kostenpositionen und Einzahlungen richten sich nach dem gewählten Jahr.
+ * Kostenpositionen und Einzahlungen richten sich nach dem gewählten Jahr. Belege (Rechnung,
+ * Gutschrift) haben zusätzlich eine Kostenart – sie darf offen bleiben, bis sie feststeht.
  */
 export function DocumentFields({
   periods,
@@ -48,6 +52,7 @@ export function DocumentFields({
   costs,
   payments,
   units,
+  categories,
   document,
 }: DocumentFieldsProps) {
   const [periodId, setPeriodId] = useState(document?.periodId ?? defaultPeriodId);
@@ -59,6 +64,19 @@ export function DocumentFields({
   const paymentOptions = payments.filter((payment) => payment.periodId === periodId);
   // Die Einzahlung ist vor allem für Zahlungsnachweise relevant – sonst nur zeigen, wenn schon verknüpft.
   const showPayment = type === "payment_proof" || linkedPayment !== undefined;
+  // Inaktive Kostenarten nur anbieten, wenn das Dokument sie bereits trägt.
+  const categoryOptions = categories.filter((c) => c.isActive || c.id === document?.categoryId);
+  // Was die OCR zur Kostenart ergeben hat – als Hilfe für die Auswahl von Hand.
+  const classification = document?.classification;
+  const categoryHint = classification
+    ? categoryNote(
+        classification,
+        classification.categoryCertain &&
+          classification.category?.categoryId === document?.categoryId,
+      )
+    : submission
+      ? "Leer lassen, wenn du die Kostenart nicht kennst – die Verwaltung ergänzt sie bei der Prüfung."
+      : "Leer lassen, wenn die Kostenart noch nicht feststeht – beim Auslesen ordnet die OCR sie zu, wenn sie sicher ist.";
 
   return (
     <>
@@ -112,6 +130,19 @@ export function DocumentFields({
           </Field>
         )}
       </div>
+
+      {isReceiptType(type) ? (
+        <Field label="Kostenart" name="categoryId" optional hint={categoryHint}>
+          <Select name="categoryId" defaultValue={document?.categoryId ?? ""}>
+            <option value="">Offen – noch nicht zugeordnet</option>
+            {categoryOptions.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      ) : null}
 
       <Field label="Beschreibung" name="description" optional>
         <Textarea name="description" defaultValue={document?.description ?? ""} rows={2} />

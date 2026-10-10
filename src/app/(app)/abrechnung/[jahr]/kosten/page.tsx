@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { deleteCostAction, updateCostAction } from "@/app/actions/billing";
 import { can, getDataScope } from "@/auth/rbac";
 import { CostFields } from "@/components/billing/cost-fields";
+import { CreditBadge } from "@/components/billing/credit-badge";
 import { DocumentChips } from "@/components/documents/document-preview";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
@@ -14,7 +15,8 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
-import { formatCents, formatDate } from "@/lib/format";
+import { isCredit } from "@/lib/billing/allocation";
+import { creditCountLabel, formatCents, formatCredit, formatDate } from "@/lib/format";
 import { listCosts } from "@/services/costs.service";
 import { isOcrAvailable } from "@/services/documents.service";
 import { listAllocationKeys, listCategories, listUnits } from "@/services/masterdata.service";
@@ -73,8 +75,15 @@ export default async function CostsPage({
   const unitName = new Map(units.map((unit) => [unit.id, unit.name]));
   // Eingereichte, noch nicht freigegebene Positionen stehen in der Liste, zählen aber nicht mit.
   const official = costs.filter((cost) => cost.reviewStatus === "approved");
-  const total = official.reduce((acc, cost) => acc + cost.amountCents, 0);
   const unreviewed = costs.length - official.length;
+  // Gutschriften (negative Beträge) sind eigene Positionen: sie zählen nicht als Kosten, sondern
+  // stehen mit Anzahl und Betrag daneben und mindern die Nettokosten.
+  const sum = (selected: CostDto[]) => selected.reduce((acc, cost) => acc + cost.amountCents, 0);
+  const credits = official.filter((cost) => isCredit(cost.amountCents));
+  const positions = official.length - credits.length;
+  const creditTotal = -sum(credits) || 0;
+  const total = sum(official);
+  const costTotal = total + creditTotal;
 
   const columns: Column<CostDto>[] = [
     { key: "date", header: "Datum", cell: (cost) => formatDate(cost.costDate), className: "whitespace-nowrap" },
@@ -91,8 +100,9 @@ export default async function CostsPage({
           {invoiceDetails(cost) ? (
             <span className="block text-xs text-muted">{invoiceDetails(cost)}</span>
           ) : null}
-          {cost.reviewStatus !== "approved" ? (
-            <span className="mt-1 block">
+          {isCredit(cost.amountCents) || cost.reviewStatus !== "approved" ? (
+            <span className="mt-1 flex flex-wrap gap-1">
+              {isCredit(cost.amountCents) ? <CreditBadge /> : null}
               <ReviewFlag status={cost.reviewStatus} />
             </span>
           ) : null}
@@ -143,7 +153,10 @@ export default async function CostsPage({
         <CardHeader
           title="Kostenpositionen"
           description={
-            `${official.length} ${official.length === 1 ? "Position" : "Positionen"} · ${formatCents(total)}` +
+            `${positions} ${positions === 1 ? "Position" : "Positionen"} · ${formatCents(costTotal)}` +
+            (credits.length > 0
+              ? ` · ${creditCountLabel(credits.length)} · ${formatCredit(creditTotal)} · Nettokosten ${formatCents(total)}`
+              : "") +
             (unreviewed > 0 ? ` · ${unreviewed} eingereicht, nicht freigegeben` : "")
           }
         />
@@ -169,7 +182,10 @@ export default async function CostsPage({
                 <>
                   {cost.description}
                   <span className="block text-xs font-normal text-muted">{cost.categoryName}</span>
-                  <ReviewFlag status={cost.reviewStatus} />
+                  <span className="flex flex-wrap gap-1">
+                    {isCredit(cost.amountCents) ? <CreditBadge /> : null}
+                    <ReviewFlag status={cost.reviewStatus} />
+                  </span>
                 </>
               )}
               mobileValue={(cost) => formatCents(cost.amountCents)}
@@ -219,13 +235,39 @@ export default async function CostsPage({
                   : undefined
               }
               footer={
-                <tr className="font-semibold">
-                  <td colSpan={5} className="px-3 py-2.5 pl-5">
-                    Summe{unreviewed > 0 ? " (freigegebene Positionen)" : ""}
-                  </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums">{formatCents(total)}</td>
-                  {canWrite || canDelete ? <td /> : null}
-                </tr>
+                <>
+                  {credits.length > 0 ? (
+                    <>
+                      <tr>
+                        <td colSpan={5} className="px-3 py-2.5 pl-5">
+                          Kosten{unreviewed > 0 ? " (freigegebene Positionen)" : ""}
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {formatCents(costTotal)}
+                        </td>
+                        {canWrite || canDelete ? <td /> : null}
+                      </tr>
+                      <tr>
+                        <td colSpan={5} className="px-3 py-2.5 pl-5">
+                          Gutschriften ({credits.length})
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {formatCredit(creditTotal)}
+                        </td>
+                        {canWrite || canDelete ? <td /> : null}
+                      </tr>
+                    </>
+                  ) : null}
+                  <tr className="font-semibold">
+                    <td colSpan={5} className="px-3 py-2.5 pl-5">
+                      {credits.length > 0
+                        ? "Nettokosten"
+                        : `Summe${unreviewed > 0 ? " (freigegebene Positionen)" : ""}`}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{formatCents(total)}</td>
+                    {canWrite || canDelete ? <td /> : null}
+                  </tr>
+                </>
               }
             />
           </div>

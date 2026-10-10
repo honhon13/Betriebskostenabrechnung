@@ -1,4 +1,4 @@
-import { formatCents } from "@/lib/format";
+import { formatCents, formatCredit } from "@/lib/format";
 import { MONTH_NAMES } from "@/lib/labels";
 import type { MonthRow } from "@/lib/billing/monthly";
 
@@ -21,7 +21,8 @@ function niceMax(cents: number): number {
 
 /**
  * Kosten und Einzahlungen je Monat als gruppierte Säulen. Zwei Reihen, zwei Farben,
- * Legende darüber; die exakten Werte stehen in der Tabelle darunter.
+ * Legende darüber; die exakten Werte stehen in der Tabelle darunter. Gutschriften sind keine
+ * Kosten und bekommen keine Säule – sie stehen im Tooltip und in ihrer eigenen Tabellenspalte.
  */
 export function MonthlyChart({ rows }: { rows: MonthRow[] }) {
   const max = niceMax(Math.max(...rows.flatMap((row) => [row.costCents, row.paymentCents]), 0));
@@ -62,7 +63,11 @@ export function MonthlyChart({ rows }: { rows: MonthRow[] }) {
                 <div
                   key={row.month}
                   className="flex h-full flex-1 items-end justify-center gap-0.5 px-0.5 hover:bg-surface-muted/60"
-                  title={`${MONTH_NAMES[(row.month ?? 1) - 1]}: Kosten ${formatCents(row.costCents)}, Einzahlungen ${formatCents(row.paymentCents)}`}
+                  title={
+                    `${MONTH_NAMES[(row.month ?? 1) - 1]}: Kosten ${formatCents(row.costCents)}, ` +
+                    (row.creditCents > 0 ? `Gutschriften ${formatCredit(row.creditCents)}, ` : "") +
+                    `Einzahlungen ${formatCents(row.paymentCents)}`
+                  }
                 >
                   <span
                     className="w-full max-w-2 rounded-t bg-chart-series sm:max-w-3"

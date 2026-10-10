@@ -47,6 +47,15 @@ export function parseCents(text: string): number {
   return Math.round(Number(digits) * 100);
 }
 
+/** Wert einer Kennzahl-Kachel (Dashboard, Abrechnung) in Cent – gefunden über ihre Beschriftung. */
+export async function tileCents(page: Page, label: string): Promise<number> {
+  const tile = page
+    .locator("div.rounded-xl")
+    .filter({ has: page.getByText(label, { exact: true }) })
+    .first();
+  return parseCents(await tile.locator("p").first().innerText());
+}
+
 /** Die Seite darf auf keinem Gerät seitlich überlaufen. */
 export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(

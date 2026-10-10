@@ -1,3 +1,5 @@
+import { inflateSync } from "node:zlib";
+
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 
@@ -67,6 +69,32 @@ async function pageCount(bytes: Uint8Array): Promise<number> {
   return (await PDFDocument.load(bytes)).getPageCount();
 }
 
+/** Die im PDF gezeichneten Zeichenketten – genug, um zu prüfen, was in der Abrechnung steht. */
+function pdfText(bytes: Uint8Array): string {
+  const pdf = Buffer.from(bytes);
+  const parts: string[] = [];
+  let offset = 0;
+  for (;;) {
+    const keyword = pdf.indexOf("stream", offset);
+    if (keyword === -1) break;
+    let start = keyword + "stream".length;
+    if (pdf[start] === 0x0d) start++;
+    if (pdf[start] === 0x0a) start++;
+    const end = pdf.indexOf("endstream", start);
+    if (end === -1) break;
+    try {
+      const content = inflateSync(pdf.subarray(start, end)).toString("latin1");
+      for (const match of content.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) {
+        parts.push(Buffer.from(match[1], "hex").toString("latin1"));
+      }
+    } catch {
+      // Kein gepackter Seiteninhalt (z. B. eine Schrift) – überspringen.
+    }
+    offset = end + "endstream".length;
+  }
+  return parts.join("\n");
+}
+
 describe("Jahresabrechnung als PDF", () => {
   it("erzeugt die Gesamtabrechnung als gültiges PDF", async () => {
     const bytes = await renderAnnualStatement(sample([cost(1, "Jahresprämie", 1798_40), cost(2, "Müllgebühr", 631_20, 2)]));
@@ -101,6 +129,55 @@ describe("Jahresabrechnung als PDF", () => {
       cost(1, "Reinigung → Stiegenhaus 🧹 Ünïcödé Кириллица " + "sehr-langer-dateiname-ohne-leerzeichen".repeat(6), -50_00),
     ]);
     await expect(renderAnnualStatement(data)).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  it("weist Gutschriften in einem eigenen Abschnitt aus – getrennt von den Kosten", async () => {
+    const data = sample([
+      cost(1, "Jahresprämie", 1798_40),
+      cost(2, "Müllgebühr", 631_20, 2),
+      cost(3, "Gutschrift Prämienanpassung", -98_40),
+    ]);
+    expect(data.statement.creditCount).toBe(1);
+    const text = pdfText(await renderAnnualStatement(data));
+
+    // Ergebnis: Kosten, Gutschriften (mit Anzahl) und Nettokosten nebeneinander.
+    expect(text).toContain("Gutschriften (1)");
+    expect(text).toContain("2.429,60"); // Kosten ohne Gutschrift
+    expect(text).toContain("98,40");
+    expect(text).toContain("2.331,20"); // Nettokosten
+    // Eigener Abschnitt mit Summen – die Gutschrift steht nach der Kostenaufstellung.
+    for (const expected of ["Kostenaufstellung", "Summe Kosten", "Summe Gutschriften", "Nettokosten"]) {
+      expect(text, expected).toContain(expected);
+    }
+    expect(text.indexOf("Gutschrift Prämienanpassung")).toBeGreaterThan(text.indexOf("Summe Kosten"));
+    expect(text.indexOf("Jahresprämie")).toBeLessThan(text.indexOf("Summe Kosten"));
+  });
+
+  it("nennt die Position „Gutschriften“ auch dann, wenn es keine gibt", async () => {
+    const text = pdfText(
+      await renderAnnualStatement(sample([cost(1, "Jahresprämie", 1798_40), cost(2, "Müllgebühr", 631_20, 2)])),
+    );
+    expect(text).toContain("Gutschriften (0)");
+    expect(text).toContain("Nettokosten");
+    expect(text).not.toContain("Summe Gutschriften");
+  });
+
+  it("zeigt in der Abrechnung einer TOP nur ihren Anteil an Kosten und Gutschriften", async () => {
+    const data = sample([cost(1, "Jahresprämie", 1798_40), cost(3, "Gutschrift Prämienanpassung", -98_40)]);
+    const own = restrictStatementToUnit(data.statement, 1);
+    const text = pdfText(
+      await renderAnnualStatement({
+        ...data,
+        focus: { unitId: 1, unitName: "TOP 1" },
+        statement: own,
+        payments: data.payments.filter((payment) => payment.unitId === 1),
+      }),
+    );
+    const balance = own.balances[0];
+    expect(balance.costCents).toBe(balance.costBeforeCreditsCents - balance.creditCents);
+    expect(text).toContain("Gutschriften (1), Anteil");
+    expect(text).toContain("Kostenanteil TOP 1");
+    expect(text).not.toContain("TOP 2");
   });
 
   it("beschreibt Guthaben, Nachzahlung und ausgeglichene Konten", () => {

@@ -1,15 +1,19 @@
 import { Paperclip, TriangleAlert } from "lucide-react";
 
-import { formatCents, formatNumber } from "@/lib/format";
+import { creditCountLabel, formatCents, formatCredit, formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Statement } from "@/types/billing";
 
 import { BalanceBadge } from "./balance-badge";
+import { CreditBadge } from "./credit-badge";
 
 /**
  * Abrechnung über alle TOPs: je Kostenposition der Betrag, der Schlüssel und der
  * Anteil jeder TOP. Bleibt auch auf dem Handy eine Tabelle (seitlich scrollbar),
  * weil der Vergleich zwischen den Spalten der Zweck dieser Ansicht ist.
+ *
+ * Gutschriften sind als solche markiert; gibt es welche, weist die Fußzeile Kosten,
+ * Gutschriften und Nettokosten getrennt aus.
  */
 export function StatementMatrix({ statement }: { statement: Statement }) {
   const units = statement.balances;
@@ -42,7 +46,8 @@ export function StatementMatrix({ statement }: { statement: Statement }) {
             <tr key={line.costId} className="align-top">
               <th scope="row" className="py-2.5 pr-3 pl-4 text-left font-normal sm:pl-5">
                 <span className="font-medium">{line.description}</span>
-                <span className="flex items-center gap-2 text-xs text-muted">
+                <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                  {line.credit ? <CreditBadge /> : null}
                   {line.categoryName}
                   {line.documents.length > 0 ? (
                     <span
@@ -82,9 +87,40 @@ export function StatementMatrix({ statement }: { statement: Statement }) {
           ))}
         </tbody>
         <tfoot className="border-t-2 border-border-strong">
-          <tr className="font-semibold">
+          {statement.creditCount > 0 ? (
+            <>
+              <tr>
+                <th scope="row" className="py-2.5 pr-3 pl-4 text-left font-normal sm:pl-5">
+                  Kosten
+                </th>
+                <td className={cell}>{formatCents(statement.costBeforeCreditsCents)}</td>
+                <td />
+                {units.map((unit) => (
+                  <td key={unit.unitId} className={cn(cell, "last:pr-5")}>
+                    {formatCents(unit.costBeforeCreditsCents)}
+                  </td>
+                ))}
+              </tr>
+              <tr>
+                <th scope="row" className="py-2.5 pr-3 pl-4 text-left font-normal sm:pl-5">
+                  Gutschriften
+                  <span className="block text-xs text-muted">
+                    {creditCountLabel(statement.creditCount)}
+                  </span>
+                </th>
+                <td className={cell}>{formatCredit(statement.creditCents)}</td>
+                <td />
+                {units.map((unit) => (
+                  <td key={unit.unitId} className={cn(cell, "last:pr-5")}>
+                    {formatCredit(unit.creditCents)}
+                  </td>
+                ))}
+              </tr>
+            </>
+          ) : null}
+          <tr className={cn("font-semibold", statement.creditCount > 0 && "border-t border-border")}>
             <th scope="row" className="py-2.5 pr-3 pl-4 text-left sm:pl-5">
-              Kosten gesamt
+              Nettokosten
             </th>
             <td className={cell}>{formatCents(statement.totalCostCents)}</td>
             <td />

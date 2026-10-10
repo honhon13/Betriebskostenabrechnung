@@ -3,12 +3,13 @@ import Link from "next/link";
 
 import { DocumentChips } from "@/components/documents/document-preview";
 import { CoverageMeter } from "@/components/dashboard/coverage-meter";
-import { formatCents, formatDate, formatNumber } from "@/lib/format";
+import { formatCents, formatCredit, formatDate, formatNumber } from "@/lib/format";
 import { PAYMENT_STATUS_LABELS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import type { PaymentDto, StatementLine, UnitBalance } from "@/types/billing";
 
 import { BalanceBadge } from "./balance-badge";
+import { CreditBadge } from "./credit-badge";
 
 interface UnitStatementProps {
   year: number;
@@ -61,6 +62,12 @@ export function UnitStatement({
             <dt className="text-xs text-muted">Kostenanteil</dt>
             <dd className="font-medium tabular-nums">{formatCents(balance.costCents)}</dd>
           </div>
+          {balance.creditCents > 0 ? (
+            <div>
+              <dt className="text-xs text-muted">darin Gutschriften</dt>
+              <dd className="font-medium tabular-nums">{formatCredit(balance.creditCents)}</dd>
+            </div>
+          ) : null}
           <div>
             <dt className="text-xs text-muted">Einzahlungen</dt>
             <dd className="font-medium tabular-nums">{formatCents(balance.paymentCents)}</dd>
@@ -120,6 +127,7 @@ export function UnitStatement({
                               .filter(Boolean)
                               .join(" · ")}
                           </span>
+                          {line.credit ? <CreditBadge className="mt-1" /> : null}
                         </th>
                         <td className={number}>{formatCents(line.amountCents)}</td>
                         <td className={cell}>
@@ -142,6 +150,26 @@ export function UnitStatement({
                   })}
                 </tbody>
                 <tfoot className="border-t border-border-strong font-semibold">
+                  {balance.creditCents > 0 ? (
+                    <>
+                      <tr className="font-normal">
+                        <th scope="row" colSpan={4} className="py-2 pr-3 pl-4 text-left font-normal sm:pl-5">
+                          Kosten
+                        </th>
+                        <td className={cn(number, "pr-4 sm:pr-5")}>
+                          {formatCents(balance.costBeforeCreditsCents)}
+                        </td>
+                      </tr>
+                      <tr className="font-normal">
+                        <th scope="row" colSpan={4} className="py-2 pr-3 pl-4 text-left font-normal sm:pl-5">
+                          Gutschriften
+                        </th>
+                        <td className={cn(number, "pr-4 sm:pr-5")}>
+                          {formatCredit(balance.creditCents)}
+                        </td>
+                      </tr>
+                    </>
+                  ) : null}
                   <tr>
                     <th scope="row" colSpan={4} className="py-2 pr-3 pl-4 text-left sm:pl-5">
                       Kostenanteil {balance.unitName}

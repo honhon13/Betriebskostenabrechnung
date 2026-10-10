@@ -20,6 +20,19 @@ export function formatCents(cents: number): string {
   return currency.format(cents / 100);
 }
 
+/**
+ * Summe von Gutschriften: intern ein positiver Betrag, angezeigt mit Minus – sie mindert die
+ * Kosten. Ohne Gutschriften steht „€ 0,00“ (nicht „-€ 0,00“).
+ */
+export function formatCredit(cents: number): string {
+  return formatCents(cents === 0 ? 0 : -cents);
+}
+
+/** „1 Gutschrift“ / „3 Gutschriften“. */
+export function creditCountLabel(count: number): string {
+  return count === 1 ? "1 Gutschrift" : `${count} Gutschriften`;
+}
+
 /** ISO-Datum (YYYY-MM-DD) → 31.12.2025. */
 export function formatDate(isoDate: string | null | undefined): string {
   if (!isoDate) return "–";

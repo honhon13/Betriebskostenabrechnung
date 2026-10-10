@@ -13,6 +13,8 @@ import {
 const DEFAULT_MODEL = "prebuilt-invoice";
 const DEFAULT_API_VERSION = "2024-11-30";
 const TIMEOUT_MS = 50_000;
+/** Für die Auswertung reicht der Anfang – Titel, Rechnungssteller und Positionen stehen vorne. */
+const MAX_TEXT_LENGTH = 20_000;
 
 /** Formate, die die vorgefertigten Modelle annehmen (kein WebP, keine Office-Dateien). */
 const SUPPORTED_MIME_TYPES = new Set([
@@ -46,7 +48,11 @@ interface AzureError {
 interface AzureAnalyzeOperation {
   status?: "notStarted" | "running" | "succeeded" | "failed" | "canceled";
   error?: AzureError;
-  analyzeResult?: { documents?: { fields?: Record<string, AzureField | undefined> }[] };
+  analyzeResult?: {
+    /** Erkannter Text des ganzen Dokuments, Zeilen durch Zeilenumbrüche getrennt. */
+    content?: string;
+    documents?: { fields?: Record<string, AzureField | undefined> }[];
+  };
 }
 
 /**
@@ -98,6 +104,7 @@ export class AzureDocumentIntelligenceOcrService implements OCRService {
       model: this.model,
       fields: mapInvoiceFields(fields),
       raw: mapRawFields(fields),
+      text: operation.analyzeResult?.content?.slice(0, MAX_TEXT_LENGTH) || null,
     };
   }
 

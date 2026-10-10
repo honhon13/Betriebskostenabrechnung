@@ -1,7 +1,9 @@
 export type PeriodStatus = "draft" | "released";
 export type AllocationSource = "unit_area" | "unit_persons" | "equal" | "manual";
 export type OcrStatus = "none" | "pending" | "done" | "failed";
-export type DocumentType = "invoice" | "payment_proof" | "contract" | "other";
+export type DocumentType = "invoice" | "credit_note" | "payment_proof" | "contract" | "other";
+/** Belege, die zu einer Kostenposition gehören: Rechnung oder Gutschrift. */
+export type ReceiptType = Extract<DocumentType, "invoice" | "credit_note">;
 export type PaymentStatus = "received" | "pending" | "cancelled";
 /** pending = ausstehende Prüfung, approved = freigegeben, rejected = abgelehnt. */
 export type ReviewStatus = "pending" | "approved" | "rejected";
@@ -203,13 +205,46 @@ export interface OcrFields {
   confidence: number | null;
 }
 
+/** Vorschlag für die Kostenart eines Belegs. */
+export interface CategorySuggestion {
+  categoryId: number;
+  categoryName: string;
+  /** Sicherheit 0–1. Ab CATEGORY_AUTO_ASSIGN_CONFIDENCE wird automatisch zugeordnet. */
+  confidence: number;
+  /** Kurze Begründung, z. B. „Rechnungssteller bisher 3× dieser Kostenart zugeordnet“. */
+  reason: string;
+}
+
+/**
+ * Was die Auswertung eines ausgelesenen Belegs ergeben hat: Rechnung oder Gutschrift und die
+ * passende Kostenart. Wird mit dem OCR-Ergebnis am Dokument gespeichert.
+ */
+export interface OcrClassification {
+  /** Erkannte Belegart – null, wenn das Dokument weder nach Rechnung noch nach Gutschrift aussieht. */
+  documentType: ReceiptType | null;
+  /** false = nur ein schwacher Hinweis; der Dokumenttyp wird dann nicht umgestellt. */
+  documentTypeCertain: boolean;
+  /** Woran die Belegart erkannt wurde, z. B. „Titel „Gutschrift““ oder „negativer Gesamtbetrag“. */
+  documentTypeSignals: string[];
+  /** Beste Kostenart – null, wenn nichts passt. */
+  category: CategorySuggestion | null;
+  /** true = sicher genug für die automatische Zuordnung; sonst bleibt die Auswahl offen. */
+  categoryCertain: boolean;
+  /** Weitere Kandidaten, beste zuerst – als Hilfe für die Auswahl von Hand. */
+  alternatives: CategorySuggestion[];
+}
+
 /** Ergebnis eines OCR-Laufs für die Oberfläche. */
 export interface OcrOutcome {
   status: "done" | "failed";
-  /** Was die OCR erkannt hat – null, wenn sie fehlgeschlagen ist. */
+  /** Was die OCR erkannt hat – null, wenn sie fehlgeschlagen ist. Beträge einer Gutschrift sind negativ. */
   fields: OcrFields | null;
   /** Beschriftungen der Formularfelder, die mit erkannten Werten gefüllt wurden. */
   filled: string[];
+  /** Belegart und Kostenart – nur für Rechnungen und Gutschriften, sonst null. */
+  classification: OcrClassification | null;
+  /** true = die vorgeschlagene Kostenart wurde am Dokument eingetragen (sie war offen und sicher genug). */
+  categoryAssigned: boolean;
   error: string | null;
 }
 
@@ -227,6 +262,9 @@ export interface DocumentDto extends ReviewInfo {
   description: string | null;
   unitId: number | null;
   unitName: string | null;
+  /** Kostenart des Belegs – null = (noch) offen. Nur für Rechnungen und Gutschriften. */
+  categoryId: number | null;
+  categoryName: string | null;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -242,6 +280,8 @@ export interface DocumentDto extends ReviewInfo {
   ocrStatus: OcrStatus;
   /** Von der OCR erkannte Werte – unabhängig davon, was inzwischen im Formular steht. */
   ocr: OcrFields | null;
+  /** Von der OCR erkannte Belegart und vorgeschlagene Kostenart – unabhängig von späteren Korrekturen. */
+  classification: OcrClassification | null;
   /** Grund, falls der letzte OCR-Lauf fehlgeschlagen ist. */
   ocrError: string | null;
   /** Upload-Datum. */
@@ -268,6 +308,11 @@ export interface StatementLine {
   categoryName: string;
   costDate: string | null;
   amountCents: number;
+  /**
+   * Gutschrift (negativer Betrag): mindert die Kosten und wird überall getrennt von den
+   * Kostenpositionen ausgewiesen.
+   */
+  credit: boolean;
   keyName: string;
   keyUnitLabel: string;
   /** Summe der Schlüsselwerte aller beteiligten TOPs. */
@@ -282,6 +327,11 @@ export interface StatementLine {
 export interface UnitBalance {
   unitId: number;
   unitName: string;
+  /** Anteil an den Kostenpositionen – ohne Gutschriften. */
+  costBeforeCreditsCents: number;
+  /** Anteil an den Gutschriften, als positiver Betrag. */
+  creditCents: number;
+  /** Nettokosten der TOP: Kostenanteil minus Gutschriften. */
   costCents: number;
   /** Nur eingegangene Einzahlungen. */
   paymentCents: number;
@@ -292,9 +342,16 @@ export interface UnitBalance {
 }
 
 export interface Statement {
+  /** Kostenpositionen und Gutschriften (`credit`). */
   lines: StatementLine[];
   balances: UnitBalance[];
-  /** Summe aller sichtbaren Kostenpositionen. */
+  /** Summe der sichtbaren Kostenpositionen – ohne Gutschriften. */
+  costBeforeCreditsCents: number;
+  /** Summe der sichtbaren Gutschriften, als positiver Betrag. */
+  creditCents: number;
+  /** Anzahl der sichtbaren Gutschriften. */
+  creditCount: number;
+  /** Nettokosten: Kostenpositionen minus Gutschriften. */
   totalCostCents: number;
   /** Summe der sichtbaren Einzahlungen. */
   totalPaymentCents: number;

@@ -10,6 +10,7 @@ import { requireUser } from "@/auth/current-user";
 import { can } from "@/auth/rbac";
 import { AddButton } from "@/components/add/add-button";
 import { CostFields } from "@/components/billing/cost-fields";
+import { CreditBadge } from "@/components/billing/credit-badge";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { DocumentFields } from "@/components/documents/document-fields";
 import { DocumentChips, DocumentPreviewButton } from "@/components/documents/document-preview";
@@ -22,6 +23,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import { isCredit } from "@/lib/billing/allocation";
 import { formatCents, formatDate, formatDateTime } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
 import { listCategories } from "@/services/masterdata.service";
@@ -72,7 +74,7 @@ export default async function SubmissionsPage() {
   // Kosten lassen sich nur in Jahre einreichen, deren Abrechnung noch nicht veröffentlicht ist.
   const draftPeriods = periods.filter((p) => p.status === "draft");
   const periodOptions = periods.map((p) => ({ id: p.id, year: p.year }));
-  const formOptions = { periods: periodOptions, units: [], ...own.linkOptions };
+  const formOptions = { periods: periodOptions, units: [], categories, ...own.linkOptions };
 
   const costColumns: Column<OwnCostDto>[] = [
     {
@@ -85,6 +87,7 @@ export default async function SubmissionsPage() {
           <span className="block text-xs text-muted">
             {[cost.categoryName, cost.supplier].filter(Boolean).join(" · ")}
           </span>
+          {isCredit(cost.amountCents) ? <CreditBadge className="mt-1" /> : null}
         </>
       ),
     },

@@ -16,10 +16,10 @@ const row = (page: Page, text: string) => page.getByRole("row").filter({ hasText
 const rows = (page: Page, text: string) => page.getByRole("row").filter({ hasText: text });
 const pdf = (name: string) => ({ name, mimeType: "application/pdf", buffer: tinyPdf(name) });
 
-/** Gesamtkosten des laufenden Jahres laut Abrechnung der Verwaltung. */
+/** Nettokosten des laufenden Jahres laut Abrechnung der Verwaltung. */
 async function officialCosts(admin: Page): Promise<number> {
   await admin.goto(`/abrechnung/${CURRENT_YEAR}`);
-  const cells = await row(admin, "Kosten gesamt").getByRole("cell").allTextContents();
+  const cells = await row(admin, "Nettokosten").getByRole("cell").allTextContents();
   return parseCents(cells[0]);
 }
 
@@ -285,9 +285,9 @@ test.describe("Dashboard – Kostenverlauf", () => {
       await expect(card.locator("figcaption").getByText(top)).toBeVisible();
     }
 
-    // Die Tabelle zum Diagramm summiert auf die Gesamtkosten des Jahres.
+    // Die Tabelle zum Diagramm summiert auf die Nettokosten des Jahres.
     const total = parseCents(
-      await page.locator("div").filter({ hasText: /^Gesamtkosten/ }).first().locator("p").first().innerText(),
+      await page.locator("div").filter({ hasText: /^Nettokosten/ }).first().locator("p").first().innerText(),
     );
     await card.getByText("Werte als Tabelle").click();
     const sums = await card.locator("tbody tr td:last-child").allTextContents();
