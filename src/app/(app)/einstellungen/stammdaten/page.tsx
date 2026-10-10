@@ -12,6 +12,8 @@ import {
 } from "@/app/actions/settings";
 import { requireUser } from "@/auth/current-user";
 import { can } from "@/auth/rbac";
+import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterSelect } from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { Field } from "@/components/forms/field";
 import { FormDialog } from "@/components/forms/form-dialog";
@@ -20,7 +22,9 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { Checkbox, Input, Select, Textarea } from "@/components/ui/input";
 import { NoAccess } from "@/components/ui/no-access";
+import { countActive, readMapped, readParam } from "@/lib/filters";
 import { formatNumber } from "@/lib/format";
+import { filterMasterData } from "@/lib/list-filters";
 import { listAllocationKeys, listCategories, listUnits } from "@/services/masterdata.service";
 import type { AllocationKeyDto, AllocationSource, CategoryDto, UnitDto } from "@/types/billing";
 
@@ -83,7 +87,12 @@ function KeyFields({ allocationKey }: { allocationKey?: AllocationKeyDto }) {
   );
 }
 
-export default async function MasterDataPage() {
+/** Aktiv oder inaktiv in der URL (?status=inaktiv). */
+const ACTIVE_PARAMS = { active: "aktiv", inactive: "inaktiv" } as const;
+
+export default async function MasterDataPage({
+  searchParams,
+}: PageProps<"/einstellungen/stammdaten">) {
   const user = await requireUser();
   if (!can(user, "masterdata:write")) return <NoAccess />;
 
@@ -94,6 +103,22 @@ export default async function MasterDataPage() {
   ]);
   const keyName = new Map(keys.map((key) => [key.id, key.name]));
   const inactive = <Badge>Inaktiv</Badge>;
+
+  // Ein Filter für alle drei Listen. Den Aktiv-Schalter haben nur Kostenarten und Umlageschlüssel –
+  // die Wohneinheiten filtert allein der Suchtext.
+  const query = await searchParams;
+  const search = readParam(query, "q");
+  const activeParam = readMapped(query, "status", ACTIVE_PARAMS);
+  const filter = { search, active: activeParam && activeParam === "active" };
+  const activeFilters = countActive([search, activeParam]);
+  const shownUnits = filterMasterData(units, { search });
+  const shownCategories = filterMasterData(categories, filter);
+  const shownKeys = filterMasterData(keys, filter);
+  const noMatch = (
+    <p className="px-4 py-6 text-center text-sm text-muted sm:px-5">
+      Keine Treffer für diese Suche bzw. Filter.
+    </p>
+  );
 
   const unitColumns: Column<UnitDto>[] = [
     { key: "name", header: "Wohneinheit", mobile: false, cell: (u) => <span className="font-medium">{u.name}</span> },
@@ -152,14 +177,35 @@ export default async function MasterDataPage() {
   return (
     <div className="space-y-4">
       <Card>
+        <FilterBar
+          action="/einstellungen/stammdaten"
+          activeCount={activeFilters}
+          className="border-b-0"
+          search={{ value: search ?? "", placeholder: "Name, Beschreibung …" }}
+        >
+          <FilterSelect
+            name="status"
+            label="Status"
+            value={activeParam && ACTIVE_PARAMS[activeParam]}
+            allLabel="Aktiv und inaktiv"
+            options={[
+              { value: ACTIVE_PARAMS.active, label: "Aktiv" },
+              { value: ACTIVE_PARAMS.inactive, label: "Inaktiv" },
+            ]}
+          />
+        </FilterBar>
+      </Card>
+
+      <Card>
         <CardHeader
           title="Wohneinheiten"
           description="Wohnfläche und Personen sind die Vorbelegung für neue Abrechnungsjahre."
         />
         <div className="pt-3">
+          {shownUnits.length === 0 ? noMatch : null}
           <DataTable
             caption="Wohneinheiten"
-            rows={units}
+            rows={shownUnits}
             columns={unitColumns}
             rowKey={(unit) => unit.id}
             mobileTitle={(unit) => unit.name}
@@ -226,9 +272,10 @@ export default async function MasterDataPage() {
           }
         />
         <div className="pt-3">
+          {shownCategories.length === 0 ? noMatch : null}
           <DataTable
             caption="Kostenarten"
-            rows={categories}
+            rows={shownCategories}
             columns={categoryColumns}
             rowKey={(category) => category.id}
             mobileTitle={(category) => (
@@ -286,9 +333,10 @@ export default async function MasterDataPage() {
           }
         />
         <div className="pt-3">
+          {shownKeys.length === 0 ? noMatch : null}
           <DataTable
             caption="Umlageschlüssel"
-            rows={keys}
+            rows={shownKeys}
             columns={keyColumns}
             rowKey={(key) => key.id}
             mobileTitle={(key) => (

@@ -1,13 +1,15 @@
 import { ChevronDown, CircleCheck, CircleMinus, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 
 import { Field } from "@/components/forms/field";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { inlineLinkClass } from "@/components/ui/interactive";
 import { accountBalanceLabel } from "@/lib/billing/account";
 import { formatCents, formatDate } from "@/lib/format";
 import { centsToInput } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import type { AccountOverview, UnitAccount, UnitDto } from "@/types/billing";
+import type { AccountMovement, AccountOverview, UnitAccount, UnitDto } from "@/types/billing";
 
 /** Kontostand als Wort mit Symbol – nie nur als Farbe oder Vorzeichen. */
 export function AccountBalanceBadge({ cents }: { cents: number }) {
@@ -33,9 +35,16 @@ const cell = "px-2 py-2.5 text-right tabular-nums whitespace-nowrap";
 
 /**
  * Konten im Überblick: je TOP Anfangssaldo, Einzahlungen, Auszahlungen und aktueller Saldo –
- * bei mehreren TOPs mit dem Gesamtbestand als Summe der Salden.
+ * bei mehreren TOPs mit dem Gesamtbestand als Summe der Salden. Mit `unitHref` führt der Name
+ * der TOP zu ihrem Kontoauszug.
  */
-export function AccountSummaryTable({ account }: { account: AccountOverview }) {
+export function AccountSummaryTable({
+  account,
+  unitHref,
+}: {
+  account: AccountOverview;
+  unitHref?: (unit: UnitAccount) => string;
+}) {
   return (
     <div className="overflow-x-auto px-2 pt-2 pb-2 sm:px-3">
       <table className="w-full min-w-[30rem] text-sm">
@@ -63,7 +72,13 @@ export function AccountSummaryTable({ account }: { account: AccountOverview }) {
           {account.units.map((unit) => (
             <tr key={unit.unitId}>
               <th scope="row" className="px-2 py-2.5 text-left font-medium whitespace-nowrap">
-                {unit.unitName}
+                {unitHref ? (
+                  <Link href={unitHref(unit)} className={inlineLinkClass} title={`Konto ${unit.unitName} anzeigen`}>
+                    {unit.unitName}
+                  </Link>
+                ) : (
+                  unit.unitName
+                )}
               </th>
               <td className={cell}>{formatCents(unit.openingCents)}</td>
               <td className={cell}>{formatCents(unit.inflowCents)}</td>
@@ -99,17 +114,35 @@ interface UnitLedgerProps {
   unit: UnitAccount;
   startDate: string;
   defaultOpen?: boolean;
+  /** Sprungziel, z. B. `konto-top-1`. */
+  id?: string;
+  /** Gefilterte Bewegungen – ohne Angabe alle. Salden und Summen bleiben die des ganzen Kontos. */
+  movements?: AccountMovement[];
+  /** Link von einer Bewegung zur Einzahlung in der Liste. */
+  movementHref?: (movement: AccountMovement) => string;
 }
 
 /**
  * Konto einer TOP wie ein Kontoauszug: Anfangssaldo zum Stichtag, danach jede Bewegung in
  * zeitlicher Reihenfolge mit dem Saldo, der sich aus ihr ergibt.
  */
-export function UnitLedger({ unit, startDate, defaultOpen = false }: UnitLedgerProps) {
+export function UnitLedger({
+  unit,
+  startDate,
+  defaultOpen = false,
+  id,
+  movements = unit.movements,
+  movementHref,
+}: UnitLedgerProps) {
   const number = "px-3 py-2 text-right align-top tabular-nums whitespace-nowrap";
+  const filtered = movements.length !== unit.movements.length;
 
   return (
-    <details open={defaultOpen || undefined} className="group rounded-xl border border-border bg-surface">
+    <details
+      id={id}
+      open={defaultOpen || undefined}
+      className="group scroll-mt-20 rounded-xl border border-border bg-surface"
+    >
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3.5 focus-visible:outline-2 focus-visible:outline-ring sm:px-5 [&::-webkit-details-marker]:hidden">
         <span className="flex min-w-24 items-center gap-2 text-base font-semibold">
           <ChevronDown className="size-4 text-muted transition-transform group-open:rotate-180" aria-hidden />
@@ -173,20 +206,30 @@ export function UnitLedger({ unit, startDate, defaultOpen = false }: UnitLedgerP
               <td className={number} />
               <td className={cn(number, "pr-4 font-medium sm:pr-5")}>{formatCents(unit.openingCents)}</td>
             </tr>
-            {unit.movements.map((movement) => (
-              <tr key={movement.id}>
+            {movements.map((movement) => {
+              const label =
+                movement.purpose ?? (movement.amountCents < 0 ? "Auszahlung" : "Einzahlung");
+              return (
+              <tr key={movement.id} className="hover:bg-surface-muted/50">
                 <td className="py-2 pr-3 pl-4 align-top whitespace-nowrap tabular-nums sm:pl-5">
                   {formatDate(movement.date)}
                 </td>
                 <th scope="row" className="px-3 py-2 text-left align-top font-normal">
-                  {movement.purpose ?? (movement.amountCents < 0 ? "Auszahlung" : "Einzahlung")}
+                  {movementHref ? (
+                    <Link href={movementHref(movement)} className={inlineLinkClass}>
+                      {label}
+                    </Link>
+                  ) : (
+                    label
+                  )}
                   <span className="block text-xs text-muted">Abrechnungsjahr {movement.year}</span>
                 </th>
                 <td className={number}>{movement.amountCents > 0 ? formatCents(movement.amountCents) : ""}</td>
                 <td className={number}>{movement.amountCents < 0 ? formatCents(-movement.amountCents) : ""}</td>
                 <td className={cn(number, "pr-4 font-medium sm:pr-5")}>{formatCents(movement.balanceCents)}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
           <tfoot className="border-t border-border-strong font-semibold">
             <tr>
@@ -202,6 +245,11 @@ export function UnitLedger({ unit, startDate, defaultOpen = false }: UnitLedgerP
         {unit.movements.length === 0 ? (
           <p className="border-t border-border px-4 py-3 text-sm text-muted sm:px-5">
             Seit dem Stichtag gibt es noch keine Ein- oder Auszahlungen.
+          </p>
+        ) : filtered ? (
+          <p className="border-t border-border px-4 py-3 text-sm text-muted sm:px-5">
+            {movements.length} von {unit.movements.length} Bewegungen in dieser Auswahl. Salden und
+            Summen gelten für das ganze Konto.
           </p>
         ) : null}
       </div>

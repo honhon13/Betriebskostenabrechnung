@@ -9,6 +9,8 @@ import {
 } from "@/app/actions/recurring";
 import { requireUser } from "@/auth/current-user";
 import { can, getDataScope } from "@/auth/rbac";
+import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterSelect } from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { RecurringFields } from "@/components/recurring/recurring-fields";
@@ -20,8 +22,10 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { slotsPerYear } from "@/lib/billing/recurring";
+import { countActive, readMapped, readNumber, readParam } from "@/lib/filters";
 import { formatCents } from "@/lib/format";
-import { RECURRING_INTERVAL_LABELS } from "@/lib/labels";
+import { RECURRING_INTERVAL_LABELS, RECURRING_INTERVALS } from "@/lib/labels";
+import { filterRecurring, type RecurringListFilter } from "@/lib/list-filters";
 import { listAllocationKeys, listCategories, listUnits } from "@/services/masterdata.service";
 import { listPeriods, listSubmittablePeriods, pickDefaultPeriod } from "@/services/periods.service";
 import { listRecurringCosts } from "@/services/recurring.service";
@@ -35,11 +39,21 @@ const PER: Record<RecurringInterval, string> = {
   yearly: "je Jahr",
 };
 
+/** Intervall in der URL (?intervall=monatlich). */
+const INTERVAL_PARAMS: Record<RecurringInterval, string> = {
+  monthly: "monatlich",
+  quarterly: "quartalsweise",
+  yearly: "jaehrlich",
+};
+
+/** Aktiv oder inaktiv in der URL (?status=inaktiv). */
+const ACTIVE_PARAMS = { active: "aktiv", inactive: "inaktiv" } as const;
+
 /**
  * Vorlagen für wiederkehrende Kosten. Die Verwaltung pflegt sie und erzeugt daraus
  * Kostenpositionen; Benutzer mit Einreich-Recht verwenden sie, um Kosten einzureichen.
  */
-export default async function RecurringCostsPage() {
+export default async function RecurringCostsPage({ searchParams }: PageProps<"/wiederkehrend">) {
   const user = await requireUser();
   if (!can(user, "recurring:read")) return <NoAccess />;
 
@@ -50,7 +64,7 @@ export default async function RecurringCostsPage() {
   const canWrite = manages && can(user, "recurring:write");
   const canDelete = manages && can(user, "recurring:delete");
 
-  const [templates, categories, allocationKeys, units, periods] = await Promise.all([
+  const [allTemplates, categories, allocationKeys, units, periods] = await Promise.all([
     listRecurringCosts(user),
     canWrite ? listCategories() : [],
     canWrite ? listAllocationKeys() : [],
@@ -61,6 +75,24 @@ export default async function RecurringCostsPage() {
   const drafts = periods.filter((period) => period.status === "draft");
   const target = pickDefaultPeriod(drafts);
   const unitName = new Map(units.map((unit) => [unit.id, unit.name]));
+
+  // Filter liegen in der URL. Zur Auswahl stehen die Kostenarten, die in Vorlagen vorkommen.
+  const query = await searchParams;
+  const usedCategories = [
+    ...new Map(allTemplates.map((t) => [t.categoryId, t.categoryName])).entries(),
+  ].sort((a, b) => a[1].localeCompare(b[1], "de"));
+  const activeParam = readMapped(query, "status", ACTIVE_PARAMS);
+  const filter: RecurringListFilter = {
+    search: readParam(query, "q"),
+    categoryId: usedCategories.find(([id]) => id === readNumber(query, "kostenart"))?.[0],
+    interval: readMapped(query, "intervall", INTERVAL_PARAMS),
+    // USER sehen ohnehin nur aktive Vorlagen.
+    active: !manages || activeParam === undefined ? undefined : activeParam === "active",
+    // Die TOP-Zuordnung sieht nur die Verwaltung.
+    unitId: manages ? units.find((u) => String(u.number) === readParam(query, "top"))?.id : undefined,
+  };
+  const activeFilters = countActive(Object.values(filter));
+  const templates = filterRecurring(allTemplates, filter);
 
   const title = (template: RecurringCostDto) => (
     <>
@@ -140,7 +172,7 @@ export default async function RecurringCostsPage() {
         }
       />
 
-      {(direct || submits) && templates.length > 0 && !target ? (
+      {(direct || submits) && allTemplates.length > 0 && !target ? (
         <Alert tone="info" title="Derzeit ist kein Abrechnungsjahr offen">
           Kosten lassen sich nur in Jahren im Entwurf {direct ? "erzeugen" : "einreichen"}.
           {direct ? " Lege ein neues Jahr an oder nimm eine Freigabe zurück." : ""}
@@ -151,7 +183,7 @@ export default async function RecurringCostsPage() {
         <CardHeader
           title="Vorlagen"
           description={
-            `${templates.length} ${templates.length === 1 ? "Vorlage" : "Vorlagen"}. ` +
+            `${templates.length} ${templates.length === 1 ? "Vorlage" : "Vorlagen"}${activeFilters > 0 ? ` von ${allTemplates.length}` : ""}. ` +
             "Erzeugte Kostenpositionen sind eigenständig und bleiben von späteren Änderungen der Vorlage unberührt."
           }
           action={
@@ -174,14 +206,62 @@ export default async function RecurringCostsPage() {
             ) : null
           }
         />
+        {allTemplates.length > 0 ? (
+          <FilterBar
+            action="/wiederkehrend"
+            activeCount={activeFilters}
+            search={{ value: filter.search ?? "", placeholder: "Beschreibung, Rechnungssteller …" }}
+          >
+            <FilterSelect
+              name="kostenart"
+              label="Kostenart"
+              value={filter.categoryId}
+              allLabel="Alle Kostenarten"
+              options={usedCategories.map(([id, name]) => ({ value: id, label: name }))}
+            />
+            <FilterSelect
+              name="intervall"
+              label="Intervall"
+              value={filter.interval && INTERVAL_PARAMS[filter.interval]}
+              allLabel="Alle Intervalle"
+              options={RECURRING_INTERVALS.map((interval) => ({
+                value: INTERVAL_PARAMS[interval],
+                label: RECURRING_INTERVAL_LABELS[interval],
+              }))}
+            />
+            {manages ? (
+              <>
+                <FilterSelect
+                  name="status"
+                  label="Status"
+                  value={activeParam && ACTIVE_PARAMS[activeParam]}
+                  allLabel="Aktiv und inaktiv"
+                  options={[
+                    { value: ACTIVE_PARAMS.active, label: "Aktiv" },
+                    { value: ACTIVE_PARAMS.inactive, label: "Inaktiv" },
+                  ]}
+                />
+                <FilterSelect
+                  name="top"
+                  label="TOP"
+                  value={units.find((u) => u.id === filter.unitId)?.number}
+                  allLabel="Alle TOPs"
+                  options={units.map((u) => ({ value: u.number, label: u.name }))}
+                />
+              </>
+            ) : null}
+          </FilterBar>
+        ) : null}
         {templates.length === 0 ? (
           <EmptyState
             icon={Repeat}
-            title="Noch keine Vorlagen"
+            title={activeFilters > 0 ? "Keine Treffer" : "Noch keine Vorlagen"}
             description={
-              canWrite
-                ? "Lege über „Vorlage“ an, was regelmäßig anfällt – etwa Hausbetreuung, Müllgebühr oder Versicherung."
-                : "Sobald die Verwaltung Vorlagen anlegt, die deine TOP betreffen, erscheinen sie hier."
+              activeFilters > 0
+                ? "Für diese Suche bzw. Filter gibt es keine Vorlagen."
+                : canWrite
+                  ? "Lege über „Vorlage“ an, was regelmäßig anfällt – etwa Hausbetreuung, Müllgebühr oder Versicherung."
+                  : "Sobald die Verwaltung Vorlagen anlegt, die deine TOP betreffen, erscheinen sie hier."
             }
           />
         ) : (

@@ -1,4 +1,4 @@
-import { Download, Files, Pencil, ScanText, Search, Trash2, X } from "lucide-react";
+import { Download, Files, Pencil, ScanText, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 import {
@@ -7,19 +7,34 @@ import {
   updateDocumentAction,
 } from "@/app/actions/documents";
 import { can, getDataScope } from "@/auth/rbac";
+import { FilterBar } from "@/components/filters/filter-bar";
+import {
+  FilterAmountRange,
+  FilterDateRange,
+  FilterSelect,
+} from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
-import { FilterForm } from "@/components/forms/filter-form";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonClass } from "@/components/ui/button";
+import { buttonClass } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { Input, Select } from "@/components/ui/input";
+import { inlineLinkClass } from "@/components/ui/interactive";
 import { EmptyState } from "@/components/ui/page";
 import { documentUrl } from "@/lib/files";
+import {
+  REVIEW_STATUS_PARAMS,
+  countActive,
+  readAmount,
+  readDate,
+  readMapped,
+  readNumber,
+  readParam,
+  type SearchParams,
+} from "@/lib/filters";
 import { formatCents, formatDate, formatDateTime, formatFileSize } from "@/lib/format";
-import { DOCUMENT_TYPE_LABELS, DOCUMENT_TYPES } from "@/lib/labels";
+import { DOCUMENT_TYPE_LABELS, DOCUMENT_TYPES, REVIEW_STATUS_LABELS } from "@/lib/labels";
 import { categoryNote, documentTypeNote } from "@/lib/ocr/classification-text";
 import {
   isOcrAvailable,
@@ -36,7 +51,15 @@ import { DocumentPreviewButton } from "./document-preview";
 import { OcrStatusBadge } from "./ocr-status";
 import { ReviewFlag } from "../review/review-badge";
 
-const ALL = "alle";
+/** Wert von ?kostenart= für Belege, deren Kostenart noch offen ist. */
+const CATEGORY_OPEN = "offen";
+
+/** OCR-Status in der URL (?ocr=…). */
+const OCR_PARAMS = { open: "offen", done: "verarbeitet", failed: "fehler" } as const;
+const OCR_LABELS = { open: "Offen", done: "Verarbeitet", failed: "Fehler" } as const;
+
+/** Zuordnung in der URL (?zuordnung=ohne). */
+const ASSIGNMENT_PARAMS = { assigned: "mit", unassigned: "ohne" } as const;
 
 const SORT_LABELS: Record<DocumentSort, string> = {
   newest: "Neueste zuerst",
@@ -63,13 +86,6 @@ function describeOcr(ocr: OcrFields): string {
       .join(" · ") || "Keine Rechnungsdaten erkannt."
   );
 }
-
-type SearchParams = Record<string, string | string[] | undefined>;
-
-const param = (params: SearchParams, name: string) => {
-  const value = params[name];
-  return typeof value === "string" ? value : undefined;
-};
 
 interface DocumentManagerProps {
   user: SessionUser;
@@ -100,20 +116,49 @@ export async function DocumentManager({
   const ocrAvailable = isOcrAvailable();
 
   // Filter aus der URL lesen – unbekannte Werte fallen auf „alle“ zurück.
-  const search = param(searchParams, "q")?.trim() ?? "";
-  const period = lockedPeriod ?? periods.find((p) => String(p.year) === param(searchParams, "jahr"));
-  const type = DOCUMENT_TYPES.find((t) => t === param(searchParams, "typ"));
-  const sort = (Object.keys(SORT_LABELS) as DocumentSort[]).find((s) => s === param(searchParams, "sort")) ?? "newest";
+  const search = readParam(searchParams, "q") ?? "";
+  const period =
+    lockedPeriod ?? periods.find((p) => String(p.year) === readParam(searchParams, "jahr"));
+  const type = DOCUMENT_TYPES.find((t) => t === readParam(searchParams, "typ"));
+  const sort =
+    (Object.keys(SORT_LABELS) as DocumentSort[]).find((s) => s === readParam(searchParams, "sort")) ??
+    "newest";
 
-  const units = await listUnits(user);
+  const [units, categories] = await Promise.all([listUnits(user), listCategories()]);
   const unit = scope.allUnits
-    ? units.find((u) => String(u.number) === param(searchParams, "top"))
+    ? units.find((u) => String(u.number) === readParam(searchParams, "top"))
     : undefined;
+  const categoryParam = readParam(searchParams, "kostenart");
+  const category = categories.find((c) => c.id === readNumber(searchParams, "kostenart"));
+  const categoryId = categoryParam === CATEGORY_OPEN ? ("open" as const) : category?.id;
+  const reviewStatus = readMapped(searchParams, "pruefung", REVIEW_STATUS_PARAMS);
+  // OCR-Status und fehlende Zuordnung sind Arbeitsstände der Verwaltung.
+  const ocrStatus = canOcr ? readMapped(searchParams, "ocr", OCR_PARAMS) : undefined;
+  const assignment = scope.allUnits
+    ? readMapped(searchParams, "zuordnung", ASSIGNMENT_PARAMS)
+    : undefined;
+  const from = readDate(searchParams, "von");
+  const to = readDate(searchParams, "bis");
+  const minCents = readAmount(searchParams, "betragAb");
+  const maxCents = readAmount(searchParams, "betragBis");
 
-  const [documents, linkOptions, categories] = await Promise.all([
-    listDocuments(user, { periodId: period?.id, unitId: unit?.id, type, search, sort }),
+  const [documents, linkOptions] = await Promise.all([
+    listDocuments(user, {
+      periodId: period?.id,
+      unitId: unit?.id,
+      type,
+      search,
+      categoryId,
+      reviewStatus,
+      ocrStatus,
+      assignment,
+      from,
+      to,
+      minCents,
+      maxCents,
+      sort,
+    }),
     canWrite ? listLinkOptions(user) : { costs: [], payments: [] },
-    canWrite ? listCategories() : [],
   ]);
 
   const formOptions: DocumentFormOptions = {
@@ -122,7 +167,22 @@ export async function DocumentManager({
     categories,
     ...linkOptions,
   };
-  const filtered = Boolean(search || type || unit || (!lockedPeriod && period) || sort !== "newest");
+  // Die Sortierung ist kein Filter – sie zählt nur fürs Zurücksetzen mit.
+  const activeFilters = countActive([
+    search,
+    type,
+    unit,
+    !lockedPeriod && period,
+    categoryId,
+    reviewStatus,
+    ocrStatus,
+    assignment,
+    from,
+    to,
+    minCents,
+    maxCents,
+  ]);
+  const filtered = activeFilters > 0;
 
   const costHref = (document: DocumentDto, costId: number) =>
     scope.allUnits
@@ -173,7 +233,7 @@ export async function DocumentManager({
             {document.categoryName ? <li>Kostenart: {document.categoryName}</li> : null}
             {document.costs.map((cost) => (
               <li key={`c${cost.id}`}>
-                <Link href={costHref(document, cost.id)} className="underline-offset-4 hover:underline">
+                <Link href={costHref(document, cost.id)} className={inlineLinkClass}>
                   {cost.label}
                 </Link>
               </li>
@@ -181,8 +241,8 @@ export async function DocumentManager({
             {document.payments.map((payment) => (
               <li key={`p${payment.id}`}>
                 <Link
-                  href={`/einzahlungen?jahr=${document.year}`}
-                  className="underline-offset-4 hover:underline"
+                  href={`/einzahlungen?jahr=${document.year}&zahlung=${payment.id}`}
+                  className={inlineLinkClass}
                 >
                   Einzahlung {payment.label}
                 </Link>
@@ -259,71 +319,94 @@ export async function DocumentManager({
           }
         />
 
-        <FilterForm
+        <FilterBar
           action={basePath}
-          className="flex flex-wrap items-end gap-2 border-b border-border px-4 pt-4 pb-4 sm:px-5"
+          activeCount={activeFilters + (sort === "newest" ? 0 : 1)}
+          search={{ value: search, placeholder: "Dateiname, Beschreibung, Rechnungssteller …" }}
         >
-          <label className="min-w-48 flex-1">
-            <span className="sr-only">Suche</span>
-            <span className="relative block">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-subtle"
-                aria-hidden
-              />
-              <Input
-                type="search"
-                name="q"
-                defaultValue={search}
-                placeholder="Dateiname, Beschreibung, Rechnungssteller …"
-                className="pl-9"
-              />
-            </span>
-          </label>
           {lockedPeriod ? null : (
-            <Select name="jahr" aria-label="Abrechnungsjahr" defaultValue={period ? String(period.year) : ALL} className="w-auto">
-              <option value={ALL}>Alle Jahre</option>
-              {periods.map((p) => (
-                <option key={p.id} value={p.year}>
-                  {p.year}
-                </option>
-              ))}
-            </Select>
+            <FilterSelect
+              name="jahr"
+              label="Abrechnungsjahr"
+              value={period?.year}
+              allLabel="Alle Jahre"
+              options={periods.map((p) => ({ value: p.year, label: String(p.year) }))}
+            />
           )}
           {scope.allUnits ? (
-            <Select name="top" aria-label="TOP" defaultValue={unit ? String(unit.number) : ALL} className="w-auto">
-              <option value={ALL}>Alle TOPs</option>
-              {units.map((u) => (
-                <option key={u.id} value={u.number}>
-                  {u.name}
-                </option>
-              ))}
-            </Select>
+            <FilterSelect
+              name="top"
+              label="TOP"
+              value={unit?.number}
+              allLabel="Alle TOPs"
+              options={units.map((u) => ({ value: u.number, label: u.name }))}
+            />
           ) : null}
-          <Select name="typ" aria-label="Dokumenttyp" defaultValue={type ?? ALL} className="w-auto">
-            <option value={ALL}>Alle Typen</option>
-            {DOCUMENT_TYPES.map((value) => (
-              <option key={value} value={value}>
-                {DOCUMENT_TYPE_LABELS[value]}
-              </option>
-            ))}
-          </Select>
-          <Select name="sort" aria-label="Sortierung" defaultValue={sort} className="w-auto">
-            {(Object.keys(SORT_LABELS) as DocumentSort[]).map((value) => (
-              <option key={value} value={value}>
-                {SORT_LABELS[value]}
-              </option>
-            ))}
-          </Select>
-          <Button type="submit" variant="secondary">
-            Suchen
-          </Button>
-          {filtered ? (
-            <Link href={basePath} className={buttonClass("ghost", "md")}>
-              <X aria-hidden />
-              Zurücksetzen
-            </Link>
+          <FilterSelect
+            name="typ"
+            label="Dokumenttyp"
+            value={type}
+            allLabel="Alle Typen"
+            options={DOCUMENT_TYPES.map((value) => ({ value, label: DOCUMENT_TYPE_LABELS[value] }))}
+          />
+          <FilterSelect
+            name="kostenart"
+            label="Kostenart"
+            value={categoryId === "open" ? CATEGORY_OPEN : categoryId}
+            allLabel="Alle Kostenarten"
+            options={[
+              { value: CATEGORY_OPEN, label: "Offen – noch nicht zugeordnet" },
+              ...categories
+                .filter((c) => c.isActive || c.id === categoryId)
+                .map((c) => ({ value: c.id, label: c.name })),
+            ]}
+          />
+          <FilterSelect
+            name="pruefung"
+            label="Prüfstand"
+            value={reviewStatus && REVIEW_STATUS_PARAMS[reviewStatus]}
+            allLabel="Jeder Prüfstand"
+            options={(["approved", "pending", "rejected"] as const).map((status) => ({
+              value: REVIEW_STATUS_PARAMS[status],
+              label: REVIEW_STATUS_LABELS[status],
+            }))}
+          />
+          {scope.allUnits ? (
+            <FilterSelect
+              name="zuordnung"
+              label="Zuordnung"
+              value={assignment && ASSIGNMENT_PARAMS[assignment]}
+              allLabel="Mit und ohne Zuordnung"
+              options={[
+                { value: ASSIGNMENT_PARAMS.assigned, label: "Zugeordnet" },
+                { value: ASSIGNMENT_PARAMS.unassigned, label: "Nicht zugeordnet" },
+              ]}
+            />
           ) : null}
-        </FilterForm>
+          {canOcr ? (
+            <FilterSelect
+              name="ocr"
+              label="OCR-Status"
+              value={ocrStatus && OCR_PARAMS[ocrStatus]}
+              allLabel="Jeder OCR-Status"
+              options={(Object.keys(OCR_PARAMS) as (keyof typeof OCR_PARAMS)[]).map((status) => ({
+                value: OCR_PARAMS[status],
+                label: OCR_LABELS[status],
+              }))}
+            />
+          ) : null}
+          <FilterDateRange from={from} to={to} subject="Belegdatum, sonst Upload-Datum" />
+          <FilterAmountRange min={minCents} max={maxCents} />
+          <FilterSelect
+            name="sort"
+            label="Sortierung"
+            value={sort}
+            options={(Object.keys(SORT_LABELS) as DocumentSort[]).map((value) => ({
+              value,
+              label: SORT_LABELS[value],
+            }))}
+          />
+        </FilterBar>
 
         {canOcr && !ocrAvailable && documents.length > 0 ? (
           <p className="px-4 pt-3 text-xs text-subtle sm:px-5">

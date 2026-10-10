@@ -110,6 +110,22 @@ body {
   color: var(--foreground);
 }
 
+/*
+ * Was sich anklicken lässt, zeigt den Zeiger. Links haben ihn von sich aus; Schaltflächen,
+ * Auswahlfelder und aufklappbare Bereiche belässt Tailwind 4 beim Standard-Cursor.
+ */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  select:not(:disabled),
+  summary,
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  label:has(input[type="checkbox"]:not(:disabled), input[type="radio"]:not(:disabled)) {
+    cursor: pointer;
+  }
+}
+
 /* Native <dialog>: zentriert, mit abgedunkeltem Hintergrund; auf dem Handy als Sheet von unten. */
 dialog.modal {
   margin: auto;

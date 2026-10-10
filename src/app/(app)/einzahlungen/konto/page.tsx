@@ -12,12 +12,16 @@ import {
 } from "@/components/account/account-parts";
 import { AddButton } from "@/components/add/add-button";
 import { StatTile } from "@/components/dashboard/stat-tile";
+import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterDateRange, FilterSelect } from "@/components/filters/filter-controls";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { PaymentsTabs } from "@/components/payments/payments-tabs";
 import { Card, CardHeader } from "@/components/ui/card";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import { countActive, readDate, readParam, withParams } from "@/lib/filters";
 import { formatCents, formatDate, todayIso } from "@/lib/format";
+import { filterMovements, type MovementFilter } from "@/lib/list-filters";
 import { getAccountOverview } from "@/services/account.service";
 import { listUnits } from "@/services/masterdata.service";
 
@@ -30,7 +34,7 @@ export const maxDuration = 60;
  * Abrechnungskonto: Anfangssaldo zum Stichtag, alle Ein- und Auszahlungen seither und der
  * aktuelle Saldo je TOP. Tatsächliche Geldbewegungen – getrennt von Kosten und Abrechnung.
  */
-export default async function AccountPage() {
+export default async function AccountPage({ searchParams }: PageProps<"/einzahlungen/konto">) {
   const user = await requireUser();
   if (!can(user, "account:read")) return <NoAccess />;
 
@@ -40,6 +44,20 @@ export default async function AccountPage() {
   const configured = account.startDate !== null;
   // Vorschlag beim Einrichten: Beginn des laufenden Jahres.
   const suggestedStartDate = `${todayIso().slice(0, 4)}-01-01`;
+
+  // Filter der Kontoauszüge: TOP (nur mit Blick auf alle TOPs), Suchtext und Zeitraum.
+  const query = await searchParams;
+  const unitNumber = new Map(units.map((unit) => [unit.id, unit.number]));
+  const selected = manages
+    ? units.find((unit) => String(unit.number) === readParam(query, "top"))
+    : undefined;
+  const filter: MovementFilter = {
+    search: readParam(query, "q"),
+    from: readDate(query, "von"),
+    to: readDate(query, "bis"),
+  };
+  const activeFilters = countActive([selected, ...Object.values(filter)]);
+  const ledgers = account.units.filter((unit) => !selected || unit.unitId === selected.id);
 
   return (
     <div className="space-y-5">
@@ -118,7 +136,14 @@ export default async function AccountPage() {
                 title="Konten je TOP"
                 description="Der Gesamtbestand ist die Summe der Salden aller TOPs. Es zählen eingegangene, freigegebene Zahlungen."
               />
-              <AccountSummaryTable account={account} />
+              <AccountSummaryTable
+                account={account}
+                unitHref={(unit) =>
+                  withParams(`/einzahlungen/konto#konto-top-${unitNumber.get(unit.unitId)}`, {
+                    top: unitNumber.get(unit.unitId),
+                  })
+                }
+              />
             </Card>
           ) : null}
 
@@ -126,13 +151,47 @@ export default async function AccountPage() {
             <h2 className="pt-2 text-base font-semibold">
               {manages ? "Kontobewegungen je TOP" : "Meine Kontobewegungen"}
             </h2>
-            {account.units.map((unit) => (
+            <Card>
+              <FilterBar
+                action="/einzahlungen/konto"
+                activeCount={activeFilters}
+                className="border-b-0"
+                search={{ value: filter.search ?? "", placeholder: "Verwendungszweck …" }}
+              >
+                {manages ? (
+                  <FilterSelect
+                    name="top"
+                    label="TOP"
+                    value={selected?.number}
+                    allLabel="Alle TOPs"
+                    options={units.map((unit) => ({ value: unit.number, label: unit.name }))}
+                  />
+                ) : null}
+                <FilterDateRange from={filter.from} to={filter.to} subject="Datum der Bewegung" />
+              </FilterBar>
+            </Card>
+            {ledgers.map((unit) => (
               <UnitLedger
                 key={unit.unitId}
+                id={`konto-top-${unitNumber.get(unit.unitId)}`}
                 unit={unit}
+                movements={filterMovements(unit.movements, filter)}
+                // Zur Einzahlung in der Liste – nur für die Verwaltung: USER sehen dort allein
+                // freigegebene Jahre, im Konto aber alle Bewegungen ihrer TOP.
+                movementHref={
+                  manages
+                    ? (movement) =>
+                        withParams("/einzahlungen", {
+                          jahr: movement.year,
+                          top: unitNumber.get(unit.unitId),
+                          zahlung: movement.id,
+                        })
+                    : undefined
+                }
                 startDate={account.startDate!}
-                // Das eigene Konto ist direkt aufgeklappt; die Verwaltung klappt je TOP auf.
-                defaultOpen={!manages}
+                // Das eigene Konto ist direkt aufgeklappt; die Verwaltung klappt je TOP auf – es sei
+                // denn, sie hat gezielt eine TOP gewählt oder die Bewegungen gefiltert.
+                defaultOpen={!manages || activeFilters > 0}
               />
             ))}
           </section>

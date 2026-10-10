@@ -15,6 +15,8 @@ import { MIN_PASSWORD_LENGTH } from "@/auth/password-policy";
 import { PERMISSIONS, ROLE_KEYS, type Permission } from "@/auth/permissions";
 import { can } from "@/auth/rbac";
 import { ActionForm } from "@/components/forms/action-form";
+import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterSelect } from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { Field } from "@/components/forms/field";
 import { FormDialog } from "@/components/forms/form-dialog";
@@ -24,7 +26,9 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { Checkbox, Input, Select, Textarea } from "@/components/ui/input";
 import { NoAccess } from "@/components/ui/no-access";
+import { countActive, readMapped, readNumber, readParam } from "@/lib/filters";
 import { formatDateTime } from "@/lib/format";
+import { filterUsers, type UserListFilter } from "@/lib/list-filters";
 import { listUnits } from "@/services/masterdata.service";
 import { listRoles, listUsers, type RoleDto, type UserDto } from "@/services/users.service";
 import type { UnitDto } from "@/types/billing";
@@ -77,11 +81,30 @@ function RoleAndUnitFields({
   );
 }
 
-export default async function UsersPage() {
+/** Status eines Zugangs in der URL (?status=deaktiviert). */
+const STATUS_PARAMS = { active: "aktiv", initial: "initialpasswort", inactive: "deaktiviert" } as const;
+const STATUS_LABELS = { active: "Aktiv", initial: "Initialpasswort", inactive: "Deaktiviert" } as const;
+
+/** Wert von ?top= für Benutzer ohne Wohneinheit. */
+const NO_UNIT = "ohne";
+
+export default async function UsersPage({ searchParams }: PageProps<"/einstellungen/benutzer">) {
   const user = await requireUser();
   if (!can(user, "user:manage")) return <NoAccess />;
 
-  const [users, roles, units] = await Promise.all([listUsers(user), listRoles(user), listUnits(user)]);
+  const [allUsers, roles, units] = await Promise.all([listUsers(user), listRoles(user), listUnits(user)]);
+
+  const query = await searchParams;
+  const unitParam = readParam(query, "top");
+  const filter: UserListFilter = {
+    search: readParam(query, "q"),
+    roleId: roles.find((role) => role.id === readNumber(query, "rolle"))?.id,
+    unitId:
+      unitParam === NO_UNIT ? "none" : units.find((unit) => String(unit.number) === unitParam)?.id,
+    status: readMapped(query, "status", STATUS_PARAMS),
+  };
+  const activeFilters = countActive(Object.values(filter));
+  const users = filterUsers(allUsers, filter);
   const permissionKeys = Object.keys(PERMISSIONS) as Permission[];
 
   const columns: Column<UserDto>[] = [
@@ -118,7 +141,10 @@ export default async function UsersPage() {
       <Card>
         <CardHeader
           title="Benutzer"
-          description="Zugänge mit Rolle und zugeordneter Wohneinheit."
+          description={
+            `${users.length} ${users.length === 1 ? "Zugang" : "Zugänge"}${activeFilters > 0 ? ` von ${allUsers.length}` : ""} ` +
+            "mit Rolle und zugeordneter Wohneinheit."
+          }
           action={
             <FormDialog
               trigger={
@@ -152,7 +178,49 @@ export default async function UsersPage() {
             </FormDialog>
           }
         />
+        <FilterBar
+          action="/einstellungen/benutzer"
+          activeCount={activeFilters}
+          search={{ value: filter.search ?? "", placeholder: "Benutzername, Anzeigename …" }}
+        >
+          <FilterSelect
+            name="rolle"
+            label="Rolle"
+            value={filter.roleId}
+            allLabel="Alle Rollen"
+            options={roles.map((role) => ({ value: role.id, label: role.name }))}
+          />
+          <FilterSelect
+            name="top"
+            label="Wohneinheit"
+            value={
+              filter.unitId === "none"
+                ? NO_UNIT
+                : units.find((unit) => unit.id === filter.unitId)?.number
+            }
+            allLabel="Alle Wohneinheiten"
+            options={[
+              ...units.map((unit) => ({ value: unit.number, label: unit.name })),
+              { value: NO_UNIT, label: "Ohne Wohneinheit" },
+            ]}
+          />
+          <FilterSelect
+            name="status"
+            label="Status"
+            value={filter.status && STATUS_PARAMS[filter.status]}
+            allLabel="Jeder Status"
+            options={(Object.keys(STATUS_PARAMS) as (keyof typeof STATUS_PARAMS)[]).map((status) => ({
+              value: STATUS_PARAMS[status],
+              label: STATUS_LABELS[status],
+            }))}
+          />
+        </FilterBar>
         <div className="pt-3">
+          {users.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-muted sm:px-5">
+              Keine Treffer für diese Suche bzw. Filter.
+            </p>
+          ) : null}
           <DataTable
             caption="Benutzer"
             rows={users}

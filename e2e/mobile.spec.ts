@@ -56,6 +56,40 @@ test.describe("Mobil", () => {
     await expect(nav).toBeHidden();
   });
 
+  test("Filter klappen auf dem Handy ein – die Suche bleibt sichtbar", async ({ page }) => {
+    await login(page, "top2");
+    await page.goto(`/abrechnung/${RELEASED_YEAR}/kosten`);
+
+    const toggle = page.getByRole("button", { name: /^Filter/ });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByPlaceholder("Beschreibung, Rechnungssteller")).toBeVisible();
+    await expect(page.getByLabel("Kostenart")).toBeHidden();
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByLabel("Kostenart")).toBeVisible();
+    await expect(page.getByLabel("Betrag ab (€)")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // Mit gesetztem Filter bleibt die Leiste offen und nennt die Anzahl.
+    await page.getByLabel("Kostenart").selectOption({ label: "Müllabfuhr" });
+    await expect(page).toHaveURL(/kostenart=\d+/);
+    await expect(page.getByRole("button", { name: /^Filter\s*1$/ })).toHaveAttribute("aria-expanded", "true");
+    // Auf dem Handy steht die Liste als Karten da (die Tabelle ist ausgeblendet).
+    await expect(page.getByRole("listitem").filter({ hasText: "Müllgebühr Jahresvorschreibung" })).toBeVisible();
+    await expect(page.getByText("Kanalbenützungsgebühr")).toHaveCount(0);
+
+    // Zurücksetzen leert Filter und Zähler; von Hand Aufgeklapptes bleibt offen, bis man es schließt.
+    await page.getByRole("link", { name: "Zurücksetzen" }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: "Kanalbenützungsgebühr" })).toBeVisible();
+    await expect(page.getByLabel("Kostenart")).toHaveValue("alle");
+    const cleared = page.getByRole("button", { name: /^Filter$/ });
+    await expect(cleared).toHaveAttribute("aria-expanded", "true");
+    await cleared.click();
+    await expect(cleared).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByLabel("Kostenart")).toBeHidden();
+  });
+
   test("keine Seite läuft seitlich über", async ({ page }) => {
     await login(page, "top2");
     for (const path of [

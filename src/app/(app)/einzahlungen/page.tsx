@@ -7,6 +7,12 @@ import { can, getDataScope } from "@/auth/rbac";
 import { AddButton } from "@/components/add/add-button";
 import { BalanceBadge } from "@/components/billing/balance-badge";
 import { DocumentChips } from "@/components/documents/document-preview";
+import { FilterBar } from "@/components/filters/filter-bar";
+import {
+  FilterAmountRange,
+  FilterDateRange,
+  FilterSelect,
+} from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { NavSelect } from "@/components/layout/year-select";
@@ -18,8 +24,20 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import {
+  ALL,
+  REVIEW_STATUS_PARAMS,
+  countActive,
+  readAmount,
+  readDate,
+  readMapped,
+  readNumber,
+  readParam,
+  withParams,
+} from "@/lib/filters";
 import { formatCents, formatDate } from "@/lib/format";
-import { PAYMENT_STATUS_LABELS, PAYMENT_STATUSES } from "@/lib/labels";
+import { PAYMENT_STATUS_LABELS, PAYMENT_STATUSES, REVIEW_STATUS_LABELS } from "@/lib/labels";
+import { filterPayments, type PaymentListFilter } from "@/lib/list-filters";
 import { isOcrAvailable } from "@/services/documents.service";
 import { listUnits } from "@/services/masterdata.service";
 import { listPayments } from "@/services/payments.service";
@@ -32,14 +50,15 @@ export const metadata: Metadata = { title: "Einzahlungen" };
 // Beim Speichern mit Beleg läuft die OCR mit – sie wartet auf Azure.
 export const maxDuration = 60;
 
-const ALL = "alle";
-
 /** Schlüssel für den Status-Filter in der URL (?status=offen). */
 const STATUS_PARAM: Record<PaymentStatus, string> = {
   received: "eingegangen",
   pending: "offen",
   cancelled: "storniert",
 };
+
+/** Ein- oder Auszahlung in der URL (?art=auszahlung). */
+const DIRECTION_PARAM = { in: "einzahlung", out: "auszahlung" } as const;
 
 function StatusBadge({ status }: { status: PaymentStatus }) {
   const label = PAYMENT_STATUS_LABELS[status];
@@ -64,22 +83,37 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
   const user = await requireUser();
   if (!can(user, "payment:read") || !can(user, "period:read")) return <NoAccess />;
 
-  const { jahr, top, status: statusParam } = await searchParams;
+  const query = await searchParams;
+  const { jahr, top } = query;
   const [periods, units] = await Promise.all([listPeriods(user), listUnits(user)]);
   const scope = getDataScope(user);
 
-  // Filter liegen in der URL: ?jahr=2025&top=2 – ohne Angabe das laufende Jahr, alle TOPs.
+  // Jahr und TOP gelten für die ganze Seite: ?jahr=2025&top=2 – ohne Angabe das laufende Jahr,
+  // alle TOPs. Die übrigen Filter betreffen nur die Liste.
   const period =
     jahr === ALL ? null : (periods.find((p) => p.year === Number(jahr)) ?? pickDefaultPeriod(periods));
   const unit = scope.allUnits ? units.find((u) => String(u.number) === top) : undefined;
 
-  const status = PAYMENT_STATUSES.find((s) => STATUS_PARAM[s] === statusParam);
+  const status = readMapped(query, "status", STATUS_PARAM);
+  const filter: PaymentListFilter = {
+    search: readParam(query, "q"),
+    reviewStatus: readMapped(query, "pruefung", REVIEW_STATUS_PARAMS),
+    direction: readMapped(query, "art", DIRECTION_PARAM),
+    from: readDate(query, "von"),
+    to: readDate(query, "bis"),
+    minCents: readAmount(query, "betragAb"),
+    maxCents: readAmount(query, "betragBis"),
+  };
+  const activeFilters = countActive([status, ...Object.values(filter)]);
+  // ?zahlung=12 – Sprungziel aus Dashboard und Abrechnungskonto.
+  const highlighted = readNumber(query, "zahlung");
 
-  const [payments, statement] = await Promise.all([
+  const [allPayments, statement] = await Promise.all([
     listPayments(user, { periodId: period?.id, unitId: unit?.id, status }),
     // Guthaben/Nachzahlung je TOP gibt es nur bezogen auf ein Abrechnungsjahr.
     period && can(user, "cost:read") ? getStatement(user, period.id) : null,
   ]);
+  const payments = filterPayments(allPayments, filter);
   // Summe der eingegangenen Zahlungen – offene und stornierte zählen nicht mit.
   const total = payments
     .filter((payment) => payment.status === "received" && payment.reviewStatus === "approved")
@@ -92,16 +126,20 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
   const ocrAvailable = allowUpload && can(user, "document:ocr") && isOcrAvailable();
   const yearValue = period ? String(period.year) : ALL;
   const topValue = unit ? String(unit.number) : ALL;
-  const statusValue = status ? STATUS_PARAM[status] : ALL;
-  // Alle Filter bleiben beim Wechsel eines einzelnen erhalten.
-  const href = (overrides: { jahr?: string; top?: string; status?: string }) => {
-    const query = new URLSearchParams({
+  // Beim Wechsel von Jahr oder TOP bleiben die Filter der Liste erhalten.
+  const href = (overrides: { jahr?: string; top?: string }) =>
+    withParams("/einzahlungen", {
       jahr: overrides.jahr ?? yearValue,
       top: overrides.top ?? topValue,
-      status: overrides.status ?? statusValue,
-    });
-    return `/einzahlungen?${query.toString().replace(/%7B/g, "{").replace(/%7D/g, "}")}`;
-  };
+      q: filter.search,
+      status: status && STATUS_PARAM[status],
+      pruefung: filter.reviewStatus && REVIEW_STATUS_PARAMS[filter.reviewStatus],
+      art: filter.direction && DIRECTION_PARAM[filter.direction],
+      von: filter.from,
+      bis: filter.to,
+      betragAb: readParam(query, "betragAb"),
+      betragBis: readParam(query, "betragBis"),
+    }).replace("%7Bvalue%7D", "{value}");
 
   const columns: Column<PaymentDto>[] = [
     { key: "date", header: "Datum", cell: (p) => formatDate(p.paymentDate), className: "whitespace-nowrap" },
@@ -172,15 +210,6 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
             hrefPattern={href({ top: "{value}" })}
           />
         ) : null}
-        <NavSelect
-          label="Zahlungsstatus"
-          value={statusValue}
-          options={[
-            { value: ALL, label: "Alle Status" },
-            ...PAYMENT_STATUSES.map((s) => ({ value: STATUS_PARAM[s], label: PAYMENT_STATUS_LABELS[s] })),
-          ]}
-          hrefPattern={href({ status: "{value}" })}
-        />
         <AddButton user={user} area="payments" period={period} unitId={unit?.id} />
       </PageHeader>
 
@@ -228,16 +257,64 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
       <Card>
         <CardHeader
           title={period ? `Einzahlungen ${period.year}` : "Einzahlungen aller Jahre"}
-          description={`${payments.length} ${payments.length === 1 ? "Einzahlung" : "Einzahlungen"} · ${formatCents(total)} eingegangen`}
+          description={
+            `${payments.length} ${payments.length === 1 ? "Einzahlung" : "Einzahlungen"} · ${formatCents(total)} eingegangen` +
+            (activeFilters > 0 ? " – in dieser Auswahl" : "")
+          }
         />
+        {periods.length > 0 ? (
+          <FilterBar
+            action="/einzahlungen"
+            activeCount={activeFilters}
+            // Jahr und TOP gehören zur Seite und bleiben beim Filtern wie beim Zurücksetzen stehen.
+            keep={{ jahr: yearValue, top: topValue }}
+            resetHref={withParams("/einzahlungen", { jahr: yearValue, top: topValue })}
+            search={{ value: filter.search ?? "", placeholder: "Beschreibung, Notiz …" }}
+          >
+            <FilterSelect
+              name="status"
+              label="Zahlungsstatus"
+              value={status && STATUS_PARAM[status]}
+              allLabel="Alle Status"
+              options={PAYMENT_STATUSES.map((s) => ({
+                value: STATUS_PARAM[s],
+                label: PAYMENT_STATUS_LABELS[s],
+              }))}
+            />
+            <FilterSelect
+              name="pruefung"
+              label="Prüfstand"
+              value={filter.reviewStatus && REVIEW_STATUS_PARAMS[filter.reviewStatus]}
+              allLabel="Jeder Prüfstand"
+              options={(["approved", "pending", "rejected"] as const).map((s) => ({
+                value: REVIEW_STATUS_PARAMS[s],
+                label: REVIEW_STATUS_LABELS[s],
+              }))}
+            />
+            <FilterSelect
+              name="art"
+              label="Art"
+              value={filter.direction && DIRECTION_PARAM[filter.direction]}
+              allLabel="Ein- und Auszahlungen"
+              options={[
+                { value: DIRECTION_PARAM.in, label: "Nur Einzahlungen" },
+                { value: DIRECTION_PARAM.out, label: "Nur Auszahlungen" },
+              ]}
+            />
+            <FilterDateRange from={filter.from} to={filter.to} subject="Zahlungsdatum" />
+            <FilterAmountRange min={filter.minCents} max={filter.maxCents} />
+          </FilterBar>
+        ) : null}
         {payments.length === 0 ? (
           <EmptyState
             icon={Wallet}
-            title="Keine Einzahlungen"
+            title={activeFilters > 0 ? "Keine Treffer" : "Keine Einzahlungen"}
             description={
               periods.length === 0
                 ? "Es gibt noch kein sichtbares Abrechnungsjahr."
-                : "Für diese Auswahl sind keine Einzahlungen erfasst."
+                : activeFilters > 0
+                  ? "Für diese Suche bzw. Filter gibt es keine Einzahlungen."
+                  : "Für diese Auswahl sind keine Einzahlungen erfasst."
             }
           />
         ) : (
@@ -247,6 +324,7 @@ export default async function PaymentsPage({ searchParams }: PageProps<"/einzahl
               rows={payments}
               columns={columns}
               rowKey={(payment) => payment.id}
+              highlight={(payment) => payment.id === highlighted}
               mobileTitle={(payment) => payment.unitName}
               mobileValue={(payment) => formatCents(payment.amountCents)}
               actions={

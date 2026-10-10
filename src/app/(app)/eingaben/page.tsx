@@ -14,6 +14,8 @@ import { CreditBadge } from "@/components/billing/credit-badge";
 import { PeriodStatusBadge } from "@/components/billing/period-status-badge";
 import { DocumentFields } from "@/components/documents/document-fields";
 import { DocumentChips, DocumentPreviewButton } from "@/components/documents/document-preview";
+import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterSelect } from "@/components/filters/filter-controls";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { PaymentFields } from "@/components/payments/payment-fields";
 import { ReviewBadge } from "@/components/review/review-badge";
@@ -24,8 +26,16 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { isCredit } from "@/lib/billing/allocation";
+import {
+  REVIEW_STATUS_PARAMS,
+  countActive,
+  readMapped,
+  readNumber,
+  readParam,
+} from "@/lib/filters";
 import { formatCents, formatDate, formatDateTime } from "@/lib/format";
-import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
+import { DOCUMENT_TYPE_LABELS, REVIEW_STATUS_LABELS } from "@/lib/labels";
+import { filterSubmissions, type SubmissionFilter } from "@/lib/list-filters";
 import { listCategories } from "@/services/masterdata.service";
 import { listSubmittablePeriods } from "@/services/periods.service";
 import {
@@ -56,7 +66,7 @@ function ReviewCell({ item }: { item: ReviewInfo }) {
  * Eigene Einträge eines Benutzers: einreichen, Prüfstand verfolgen, nachbessern.
  * Alles hier zählt erst nach Freigabe durch die Verwaltung.
  */
-export default async function SubmissionsPage() {
+export default async function SubmissionsPage({ searchParams }: PageProps<"/eingaben">) {
   const user = await requireUser();
   const allowed = {
     period: can(user, "period:submit"),
@@ -66,15 +76,55 @@ export default async function SubmissionsPage() {
   };
   if (!Object.values(allowed).some(Boolean)) return <NoAccess />;
 
-  const [own, periods, categories] = await Promise.all([
+  const [all, periods, categories] = await Promise.all([
     listOwnSubmissions(user),
     listSubmittablePeriods(user),
     listCategories(),
   ]);
+
+  // Ein Filter für alle vier Listen: Suchtext, Abrechnungsjahr und Prüfstand.
+  const query = await searchParams;
+  const years = [
+    ...new Set([...all.costs, ...all.payments, ...all.documents, ...all.periods].map((e) => e.year)),
+  ].sort((a, b) => b - a);
+  const filter: SubmissionFilter = {
+    search: readParam(query, "q"),
+    year: years.find((year) => year === readNumber(query, "jahr")),
+    reviewStatus: readMapped(query, "pruefung", REVIEW_STATUS_PARAMS),
+  };
+  const activeFilters = countActive(Object.values(filter));
+  const own = {
+    ...all,
+    costs: filterSubmissions(all.costs, filter, (cost) => [
+      cost.description,
+      cost.categoryName,
+      cost.supplier,
+      cost.invoiceNumber,
+      cost.notes,
+    ]),
+    payments: filterSubmissions(all.payments, filter, (payment) => [payment.purpose, payment.note]),
+    documents: filterSubmissions(all.documents, filter, (document) => [
+      document.fileName,
+      document.description,
+      document.supplier,
+      document.invoiceNumber,
+      ...document.costs.map((cost) => cost.label),
+    ]),
+    periods: filterSubmissions(all.periods, filter, (period) => [period.year, period.notes]),
+  };
+  const total = all.costs.length + all.payments.length + all.documents.length + all.periods.length;
+  /** Anzahl in der Kartenüberschrift – mit Hinweis, wenn gefiltert ist. */
+  const counted = (shown: number, of: number, one: string, many: string) =>
+    `${shown} ${shown === 1 ? one : many}${activeFilters > 0 ? ` von ${of}` : ""}`;
+  const noMatch = {
+    icon: Send,
+    title: "Keine Treffer",
+    description: "Für diese Suche bzw. Filter gibt es hier keine Einträge.",
+  };
   // Kosten lassen sich nur in Jahre einreichen, deren Abrechnung noch nicht veröffentlicht ist.
   const draftPeriods = periods.filter((p) => p.status === "draft");
   const periodOptions = periods.map((p) => ({ id: p.id, year: p.year }));
-  const formOptions = { periods: periodOptions, units: [], categories, ...own.linkOptions };
+  const formOptions = { periods: periodOptions, units: [], categories, ...all.linkOptions };
 
   const costColumns: Column<OwnCostDto>[] = [
     {
@@ -182,13 +232,47 @@ export default async function SubmissionsPage() {
         wird er erneut geprüft. Löschen kann nur die Verwaltung.
       </Alert>
 
+      {total > 0 ? (
+        <Card>
+          <FilterBar
+            action="/eingaben"
+            activeCount={activeFilters}
+            className="border-b-0"
+            search={{
+              value: filter.search ?? "",
+              placeholder: "Beschreibung, Datei, Rechnungssteller …",
+            }}
+          >
+            <FilterSelect
+              name="jahr"
+              label="Abrechnungsjahr"
+              value={filter.year}
+              allLabel="Alle Jahre"
+              options={years.map((year) => ({ value: year, label: String(year) }))}
+            />
+            <FilterSelect
+              name="pruefung"
+              label="Prüfstand"
+              value={filter.reviewStatus && REVIEW_STATUS_PARAMS[filter.reviewStatus]}
+              allLabel="Jeder Prüfstand"
+              options={(["pending", "approved", "rejected"] as const).map((status) => ({
+                value: REVIEW_STATUS_PARAMS[status],
+                label: REVIEW_STATUS_LABELS[status],
+              }))}
+            />
+          </FilterBar>
+        </Card>
+      ) : null}
+
       {allowed.cost ? (
         <Card>
           <CardHeader
             title="Kosten"
-            description={`${own.costs.length} eingereichte ${own.costs.length === 1 ? "Position" : "Positionen"}`}
+            description={counted(own.costs.length, all.costs.length, "eingereichte Position", "eingereichte Positionen")}
           />
-          {own.costs.length === 0 ? (
+          {own.costs.length === 0 && all.costs.length > 0 ? (
+            <EmptyState {...noMatch} />
+          ) : own.costs.length === 0 ? (
             <EmptyState
               icon={Send}
               title="Noch keine Kosten eingereicht"
@@ -247,9 +331,11 @@ export default async function SubmissionsPage() {
         <Card>
           <CardHeader
             title="Einzahlungen"
-            description={`${own.payments.length} eingereichte ${own.payments.length === 1 ? "Einzahlung" : "Einzahlungen"}`}
+            description={counted(own.payments.length, all.payments.length, "eingereichte Einzahlung", "eingereichte Einzahlungen")}
           />
-          {own.payments.length === 0 ? (
+          {own.payments.length === 0 && all.payments.length > 0 ? (
+            <EmptyState {...noMatch} />
+          ) : own.payments.length === 0 ? (
             <EmptyState
               icon={Send}
               title="Noch keine Einzahlungen eingereicht"
@@ -293,9 +379,11 @@ export default async function SubmissionsPage() {
         <Card>
           <CardHeader
             title="Dokumente"
-            description={`${own.documents.length} hochgeladene ${own.documents.length === 1 ? "Datei" : "Dateien"}`}
+            description={counted(own.documents.length, all.documents.length, "hochgeladene Datei", "hochgeladene Dateien")}
           />
-          {own.documents.length === 0 ? (
+          {own.documents.length === 0 && all.documents.length > 0 ? (
+            <EmptyState {...noMatch} />
+          ) : own.documents.length === 0 ? (
             <EmptyState
               icon={Send}
               title="Noch keine Dokumente eingereicht"

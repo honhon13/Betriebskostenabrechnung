@@ -1,5 +1,8 @@
+import Link from "next/link";
+
+import { inlineLinkClass } from "@/components/ui/interactive";
 import { formatCents, formatCredit } from "@/lib/format";
-import type { CostTrend } from "@/lib/billing/trend";
+import type { CostTrend, TrendPoint } from "@/lib/billing/trend";
 import { cn } from "@/lib/utils";
 
 /** Feste Farbe je Reihe (TOP) – die Zuordnung hängt an der TOP, nicht an ihrem Rang. */
@@ -24,6 +27,11 @@ interface CostTrendChartProps {
   trend: CostTrend;
   /** Beschriftung der Reihe, wenn es nur eine gibt (z. B. „Mein Kostenanteil“). */
   singleLabel: string;
+  /**
+   * Ansicht hinter einem Zeitabschnitt, z. B. die Kosten des Monats. Die Säule ist dann mit der
+   * Maus anklickbar; für Tastatur und Vorleseprogramme steht derselbe Link in der Tabelle.
+   */
+  pointHref?: (point: TrendPoint) => string | undefined;
 }
 
 /**
@@ -34,7 +42,7 @@ interface CostTrendChartProps {
  * Gutschriften sind keine Kosten und bekommen keine Säule: sie stehen als Betrag im Tooltip
  * und in einer eigenen Spalte der Tabelle, die „Summe“ dort sind die Nettokosten.
  */
-export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
+export function CostTrendChart({ trend, singleLabel, pointHref }: CostTrendChartProps) {
   // Mehr als drei Reihen bekämen keine sauber unterscheidbaren Farben – dann nur die Summe zeigen.
   const stacked = trend.units.length > 1 && trend.units.length <= SERIES.length;
   const series = stacked ? trend.units.map((unit) => unit.name) : [singleLabel];
@@ -113,12 +121,11 @@ export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
                       ]
                     : []),
                 ].join("\n");
-                return (
-                  <div
-                    key={point.label}
-                    title={tooltip}
-                    className="flex h-full flex-1 flex-col-reverse items-center px-0.5 hover:bg-surface-muted/60"
-                  >
+                const href = pointHref?.(point);
+                const column =
+                  "flex h-full flex-1 flex-col-reverse items-center px-0.5 hover:bg-surface-muted/60";
+                const bars = (
+                  <>
                     {/* Von unten nach oben gestapelt; 2px Abstand in Flächenfarbe trennt die Segmente. */}
                     {segments.map((cents, index) =>
                       cents > 0 ? (
@@ -142,6 +149,23 @@ export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
                         style={{ height: height(point.undistributedCents) }}
                       />
                     ) : null}
+                  </>
+                );
+                // Mit Ziel ist die ganze Spalte ein Link. Das Diagramm ist für Vorleseprogramme ein
+                // Bild, deshalb ohne Tastaturfokus – derselbe Link steht in der Tabelle darunter.
+                return href ? (
+                  <Link
+                    key={point.label}
+                    href={href}
+                    tabIndex={-1}
+                    title={`${tooltip}\n→ Klicken zum Anzeigen`}
+                    className={column}
+                  >
+                    {bars}
+                  </Link>
+                ) : (
+                  <div key={point.label} title={tooltip} className={column}>
+                    {bars}
                   </div>
                 );
               })}
@@ -197,7 +221,13 @@ export function CostTrendChart({ trend, singleLabel }: CostTrendChartProps) {
               {trend.points.map((point) => (
                 <tr key={point.label}>
                   <th scope="row" className="py-1.5 pr-3 text-left font-normal">
-                    {point.title}
+                    {pointHref?.(point) ? (
+                      <Link href={pointHref(point)!} className={inlineLinkClass}>
+                        {point.title}
+                      </Link>
+                    ) : (
+                      point.title
+                    )}
                   </th>
                   {segmentsOf(point).map((cents, index) => (
                     <td key={series[index]} className="px-2 py-1.5 text-right tabular-nums">

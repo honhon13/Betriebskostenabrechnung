@@ -1,16 +1,16 @@
-import { ChevronLeft, ChevronRight, ScrollText, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ScrollText } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { requireUser } from "@/auth/current-user";
 import { can } from "@/auth/rbac";
 import { AuditDetailsView } from "@/components/audit/audit-details";
-import { FilterForm } from "@/components/forms/filter-form";
+import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterDateRange, FilterSelect } from "@/components/filters/filter-controls";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonClass } from "@/components/ui/button";
+import { buttonClass } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { Input, Select } from "@/components/ui/input";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
 import {
@@ -21,14 +21,13 @@ import {
   type AuditAction,
   type AuditArea,
 } from "@/lib/audit";
+import { countActive, readDate, readParam } from "@/lib/filters";
 import { formatDateTime } from "@/lib/format";
 import { listAuditActors, listAuditLog, type AuditEntryDto } from "@/services/audit.service";
 
 export const metadata: Metadata = { title: "Audit-Log" };
 
-const ALL = "alle";
 const BASE = "/einstellungen/protokoll";
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const areaOf = (action: string): AuditArea | null =>
   action in AUDIT_ACTIONS ? AUDIT_ACTIONS[action as AuditAction].area : null;
@@ -42,19 +41,16 @@ export default async function AuditLogPage({ searchParams }: PageProps<"/einstel
   if (!can(user, "audit:read")) return <NoAccess />;
 
   const params = await searchParams;
-  const param = (name: string) => {
-    const value = params[name];
-    return typeof value === "string" && value !== "" ? value : undefined;
-  };
+  const param = (name: string) => readParam(params, name);
 
   // Unbekannte Werte fallen auf „alle“ zurück.
   const actors = await listAuditActors(user);
-  const search = param("q")?.trim() ?? "";
+  const search = param("q") ?? "";
   const areaParam = param("bereich");
   const area = areaParam && isAuditArea(areaParam) ? areaParam : undefined;
   const actor = actors.find((entry) => String(entry.id) === param("benutzer"));
-  const from = ISO_DATE.test(param("von") ?? "") ? param("von") : undefined;
-  const to = ISO_DATE.test(param("bis") ?? "") ? param("bis") : undefined;
+  const from = readDate(params, "von");
+  const to = readDate(params, "bis");
 
   const log = await listAuditLog(user, {
     search,
@@ -137,65 +133,30 @@ export default async function AuditLogPage({ searchParams }: PageProps<"/einstel
         }
       />
 
-      <FilterForm
+      <FilterBar
         action={BASE}
-        className="flex flex-wrap items-end gap-2 border-b border-border px-4 pt-4 pb-4 sm:px-5"
+        activeCount={countActive([search, area, actor, from, to])}
+        search={{ value: search, placeholder: "Datensatz oder Benutzer …" }}
       >
-        <label className="min-w-48 flex-1">
-          <span className="sr-only">Suche</span>
-          <span className="relative block">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-subtle"
-              aria-hidden
-            />
-            <Input
-              type="search"
-              name="q"
-              defaultValue={search}
-              placeholder="Datensatz oder Benutzer …"
-              className="pl-9"
-            />
-          </span>
-        </label>
-        <Select name="bereich" aria-label="Bereich" defaultValue={area ?? ALL} className="w-auto">
-          <option value={ALL}>Alle Bereiche</option>
-          {(Object.keys(AUDIT_AREAS) as AuditArea[]).map((value) => (
-            <option key={value} value={value}>
-              {AUDIT_AREAS[value]}
-            </option>
-          ))}
-        </Select>
-        <Select
+        <FilterSelect
+          name="bereich"
+          label="Bereich"
+          value={area}
+          allLabel="Alle Bereiche"
+          options={(Object.keys(AUDIT_AREAS) as AuditArea[]).map((value) => ({
+            value,
+            label: AUDIT_AREAS[value],
+          }))}
+        />
+        <FilterSelect
           name="benutzer"
-          aria-label="Benutzer"
-          defaultValue={actor ? String(actor.id) : ALL}
-          className="w-auto"
-        >
-          <option value={ALL}>Alle Benutzer</option>
-          {actors.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.name}
-            </option>
-          ))}
-        </Select>
-        <label className="flex flex-col gap-0.5 text-xs text-muted">
-          Von
-          <Input type="date" name="von" defaultValue={from ?? ""} className="w-auto" />
-        </label>
-        <label className="flex flex-col gap-0.5 text-xs text-muted">
-          Bis
-          <Input type="date" name="bis" defaultValue={to ?? ""} className="w-auto" />
-        </label>
-        <Button type="submit" variant="secondary">
-          Suchen
-        </Button>
-        {filtered ? (
-          <Link href={BASE} className={buttonClass("ghost", "md")}>
-            <X aria-hidden />
-            Zurücksetzen
-          </Link>
-        ) : null}
-      </FilterForm>
+          label="Benutzer"
+          value={actor?.id}
+          allLabel="Alle Benutzer"
+          options={actors.map((entry) => ({ value: entry.id, label: entry.name }))}
+        />
+        <FilterDateRange from={from} to={to} subject="Zeitpunkt" />
+      </FilterBar>
 
       {log.entries.length === 0 ? (
         <EmptyState

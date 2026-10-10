@@ -13,6 +13,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
 import { summarizeStatement } from "@/lib/billing/allocation";
+import { readParam, withParams } from "@/lib/filters";
 import { creditCountLabel, formatCents, formatCredit } from "@/lib/format";
 import { listUnits } from "@/services/masterdata.service";
 import { loadPeriodPage } from "@/services/page-context";
@@ -45,7 +46,15 @@ export default async function StatementPage({
   ]);
   const totals = summarizeStatement(statement, scope.allUnits);
   const draft = period.status === "draft";
-  const highlighted = Number((await searchParams).position);
+  const query = await searchParams;
+  const highlighted = Number(query.position);
+  // ?top=2 klappt die Abrechnung dieser TOP auf (Sprungziel #top-2) – z. B. vom Dashboard aus.
+  const unitNumber = new Map(units.map((unit) => [unit.id, unit.number]));
+  const openUnit = scope.allUnits
+    ? units.find((unit) => String(unit.number) === readParam(query, "top"))
+    : undefined;
+  const kostenPath = `/abrechnung/${period.year}/kosten`;
+  const canSeePayments = can(user, "payment:read");
   const costCount = statement.lines.length - statement.creditCount;
 
   if (statement.lines.length === 0 && payments.length === 0) {
@@ -88,6 +97,8 @@ export default async function StatementPage({
           label={scope.allUnits ? "Kosten" : "Kosten (mein Anteil)"}
           value={formatCents(totals.costBeforeCreditsCents)}
           icon={ReceiptText}
+          href={scope.allUnits ? withParams(kostenPath, { art: "kosten" }) : undefined}
+          hrefLabel="Kostenpositionen anzeigen"
         >
           {costCount} {costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
         </StatTile>
@@ -96,6 +107,8 @@ export default async function StatementPage({
           label={scope.allUnits ? "Gutschriften" : "Gutschriften (mein Anteil)"}
           value={formatCredit(totals.creditCents)}
           icon={FileMinus}
+          href={scope.allUnits ? withParams(kostenPath, { art: "gutschriften" }) : undefined}
+          hrefLabel="Gutschriften anzeigen"
         >
           {totals.creditCount === 0 ? "Keine Gutschriften" : creditCountLabel(totals.creditCount)}
         </StatTile>
@@ -112,6 +125,8 @@ export default async function StatementPage({
           label={scope.allUnits ? "Gesamtzahlungen" : "Meine Einzahlungen"}
           value={formatCents(totals.paymentCents)}
           icon={Wallet}
+          href={canSeePayments ? withParams("/einzahlungen", { jahr: period.year }) : undefined}
+          hrefLabel="Einzahlungen anzeigen"
         >
           {totals.pendingPaymentCents !== 0
             ? `zusätzlich ${formatCents(totals.pendingPaymentCents)} offen erwartet`
@@ -153,6 +168,7 @@ export default async function StatementPage({
           statement.balances.map((balance) => (
             <UnitStatement
               key={balance.unitId}
+              id={`top-${unitNumber.get(balance.unitId)}`}
               year={period.year}
               balance={balance}
               lines={statement.lines.filter((line) =>
@@ -161,11 +177,25 @@ export default async function StatementPage({
               payments={payments.filter((payment) => payment.unitId === balance.unitId)}
               documentsHref={
                 scope.allUnits
-                  ? `/dokumente?jahr=${period.year}&top=${units.find((u) => u.id === balance.unitId)?.number ?? ""}`
+                  ? withParams("/dokumente", { jahr: period.year, top: unitNumber.get(balance.unitId) })
                   : undefined
               }
-              // Die eigene Abrechnung ist direkt aufgeklappt; die Verwaltung klappt je TOP auf.
-              defaultOpen={!scope.allUnits}
+              paymentsHref={
+                canSeePayments
+                  ? withParams("/einzahlungen", {
+                      jahr: period.year,
+                      top: scope.allUnits ? unitNumber.get(balance.unitId) : undefined,
+                    })
+                  : undefined
+              }
+              costsHref={
+                scope.allUnits
+                  ? withParams(kostenPath, { top: unitNumber.get(balance.unitId) })
+                  : undefined
+              }
+              // Die eigene Abrechnung ist direkt aufgeklappt; die Verwaltung klappt je TOP auf –
+              // oder kommt über einen Link direkt bei einer TOP an.
+              defaultOpen={!scope.allUnits || openUnit?.id === balance.unitId}
               highlightCostId={highlighted}
             />
           ))

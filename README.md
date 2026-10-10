@@ -48,6 +48,56 @@ Aktion des jeweiligen Bereichs zuerst, auf dem Handy als Auswahl von unten:
 Zwei Grenzen sind gewollt: Je Jahr gibt es genau eine Abrechnung, und dieselbe Datei lässt sich
 je Abrechnungsjahr nur einmal hochladen (Schutz vor versehentlichen Doppel-Uploads).
 
+## Navigation und Filter
+
+**Dashboard.** Jede Kennzahl, Karte und Listenzeile führt in die Ansicht, aus der sie stammt –
+mit dem gewählten Jahr und, wo es eine gibt, der TOP als Filter:
+
+| Element | Ziel (Verwaltung) |
+| --- | --- |
+| Kacheln *Kosten* / *Gutschriften* | Kostenliste des Jahres, gefiltert nach Art |
+| Kacheln *Nettokosten* / Saldo | Abrechnung des Jahres |
+| Kacheln *Einzahlungen* / *Belege & Dokumente* | Einzahlungen bzw. Dokumente des Jahres |
+| Abrechnung je TOP | TOP → ihre Abrechnung (aufgeklappt, `?top=2#top-2`); Nettokosten → Kostenliste der TOP; Einzahlungen → Einzahlungen der TOP |
+| Kosten nach Kostenart | Kostenliste der Kostenart; die Zeile „Gutschriften" zu deren Gutschriften |
+| Kostenverlauf | Säule bzw. Tabellenzeile → Kosten des Monats (`?von=…&bis=…`), im Jahresvergleich die Abrechnung des Jahres |
+| Abrechnungskonto | TOP und Bewegung → Kontoauszug der TOP |
+| Offene Positionen | genau die gezählte Auswahl, z. B. Kosten ohne Beleg (`?beleg=ohne`) oder Dokumente ohne Zuordnung (`?zuordnung=ohne`) |
+| Letzte Dokumente / Aktivitäten | Kostenposition bzw. Einzahlung, in ihrer Liste markiert (`?position=…`, `?zahlung=…`); Dokumente über Suche bzw. Dokumenttyp |
+
+Verlinkt wird nur, was die Rolle öffnen darf: USER kommen statt in die Kostenliste in ihre
+eigene Abrechnung, Links mit einer TOP gibt es für sie nicht. Alles Anklickbare zeigt den Zeiger
+und hebt sich beim Überfahren ab (Kacheln mit Rahmen und Pfeil, Zeilen mit Hintergrund).
+
+**Filter.** Alle Listen haben dieselbe Filterleiste (`src/components/filters`): Suchfeld,
+kombinierbare Filter, „Suchen" und „Zurücksetzen". Auswahlfelder wirken sofort, Suche, Datum und
+Betrag beim Absenden. Der Zustand steht vollständig in der URL – eine gefilterte Ansicht lässt
+sich verlinken, neu laden und mit „Zurück" wieder verlassen. Auf dem Handy bleibt die Suche
+sichtbar, die übrigen Filter klappen hinter „Filter" ein (mit Zähler der gesetzten Filter).
+
+| Liste | Filter |
+| --- | --- |
+| Kosten | Suche, Kostenart, TOP, Art (Kosten/Gutschriften), Prüfstand, Beleg (mit/ohne), Rechnungsdatum, Betrag |
+| Einzahlungen | Jahr und TOP (Seite), Suche, Zahlungsstatus, Prüfstand, Art (Ein-/Auszahlung), Zahlungsdatum, Betrag |
+| Abrechnungskonto | TOP, Suche, Datum der Bewegung – Salden und Summen bleiben die des ganzen Kontos |
+| Dokumente | Suche, Jahr, TOP, Dokumenttyp, Kostenart (auch „offen"), Prüfstand, Zuordnung, OCR-Status, Datum, Betrag, Sortierung |
+| Prüfung | Prüfstand (Reiter), Suche, Art, Jahr, Einreicher, Datum der Einreichung, Betrag |
+| Meine Eingaben | Suche, Jahr, Prüfstand – für alle vier Listen gemeinsam |
+| Wiederkehrende Kosten | Suche, Kostenart, Intervall, Status, TOP |
+| Jahresübersicht | Status, Jahr von–bis |
+| Benutzer | Suche, Rolle, Wohneinheit, Status |
+| Stammdaten | Suche, Status – für Wohneinheiten, Kostenarten und Umlageschlüssel gemeinsam |
+| Audit-Log | Suche, Bereich, Benutzer, Zeitraum |
+
+Summen und Zähler einer gefilterten Liste beziehen sich auf die Auswahl („3 Positionen – Auswahl
+aus 9"). Beträge werden ohne Vorzeichen verglichen: „ab € 50" findet auch eine Gutschrift oder
+Auszahlung über € 50. Unbekannte Werte in der URL gelten als „kein Filter".
+
+**Rollen.** Ein Filter schränkt nur ein, was der Service dem Benutzer ohnehin liefert – er kann
+den Sichtbereich nie erweitern. Filter, die Daten anderer TOPs oder Arbeitsstände der Verwaltung
+betreffen (TOP, Zuordnung, OCR-Status, inaktive Vorlagen), gibt es für USER nicht, und als
+Parameter in der URL bleiben sie wirkungslos.
+
 ## Jahresabrechnung als PDF
 
 Im Bereich **Abrechnung** – in der Jahresübersicht und im Kopf jedes Jahres – steht
@@ -301,6 +351,8 @@ Prüfer und Kommentar.
 | Neue Rolle | In der Oberfläche anlegen oder `ROLE_DEFINITIONS` ergänzen |
 | Neuer Umlageschlüssel | *Einstellungen → Stammdaten* (Werte je Abrechnungsjahr) |
 | Neue Aktion im Audit-Log | Zeile in `AUDIT_ACTIONS` (`src/lib/audit.ts`), `recordAudit(...)` im Service |
+| Filter für eine Liste | `FilterBar` mit `FilterSelect`/`FilterDateRange`/`FilterAmountRange` (`src/components/filters`); Parameter mit `readParam` & Co. lesen (`src/lib/filters.ts`), Filterlogik als reine Funktion in `src/lib/list-filters.ts` |
+| Link auf eine gefilterte Ansicht | `withParams(pfad, { … })` – dieselben Parameter, die die Filterleiste schreibt |
 | Neue „Hinzufügen"-Aktion | Funktion in `ADD_ACTIONS` (`src/components/add/add-button.tsx`): Recht prüfen, Formular in `AddFormDialog` zurückgeben |
 | Anderer OCR-Anbieter | Klasse mit `OCRService` + `services/ocr/index.ts` |
 | Schemaänderung | `src/db/schema.ts` ändern → `npm run db:generate` → `npm run db:migrate` |
@@ -500,7 +552,7 @@ Alle Variablen sind in [.env.example](.env.example) beschrieben.
 | --- | --- |
 | `npm run dev` / `build` / `start` | Entwicklung, Produktions-Build, Produktionsserver |
 | `npm run lint` / `typecheck` | ESLint, TypeScript |
-| `npm test` | Unit-Tests: Verteilung, Gutschriften und Nettokosten, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Erkennung von Gutschriften, Kostenart-Vorschlag, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung, Abrechnungskonto |
+| `npm test` | Unit-Tests: Verteilung, Filterlogik der Listen, Gutschriften und Nettokosten, Monatsübersicht, Kostenverlauf, Beträge, RBAC, Passwörter, OCR-Anbindung, Erkennung von Gutschriften, Kostenart-Vorschlag, Service-Rechte, Audit-Katalog, Zeiträume wiederkehrender Kosten, PDF-Jahresabrechnung, Abrechnungskonto |
 | `npm run test:e2e` | Build + Playwright (Desktop und Mobil) gegen die DB aus `.env.local` |
 | `npm run db:generate` | Migration aus Schemaänderungen erzeugen |
 | `npm run db:migrate` | Migrationen ausführen |

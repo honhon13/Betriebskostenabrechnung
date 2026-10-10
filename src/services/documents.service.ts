@@ -2,7 +2,22 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
-import { and, asc, count, desc, eq, exists, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  notExists,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { authorize, authorizeGlobalWrite, can, getDataScope, seesUnreviewed } from "@/auth/rbac";
 import { getDb, type DbExecutor } from "@/db/client";
@@ -26,7 +41,7 @@ import {
   sanitizeFileName,
 } from "@/lib/files";
 import { formatCents, formatDate, formatFileSize } from "@/lib/format";
-import { DOCUMENT_TYPE_LABELS, isReceiptType, receiptTypeOf } from "@/lib/labels";
+import { DOCUMENT_TYPE_LABELS, RECEIPT_TYPES, isReceiptType, receiptTypeOf } from "@/lib/labels";
 import {
   categoryNote,
   documentTypeNote,
@@ -43,6 +58,7 @@ import type {
   OcrClassification,
   OcrFields,
   OcrOutcome,
+  ReviewStatus,
 } from "@/types/billing";
 
 import { describeDocument } from "./audit-snapshots";
@@ -123,6 +139,22 @@ export interface DocumentFilter {
   type?: DocumentType;
   /** Volltext über Dateiname, Beschreibung, Rechnungssteller, Rechnungsnummer, Kostenposition. */
   search?: string;
+  /** Kostenart des Belegs; "open" = Rechnungen und Gutschriften ohne Kostenart. */
+  categoryId?: number | "open";
+  reviewStatus?: ReviewStatus;
+  /** Nur mit dem Recht document:ocr wirksam – der OCR-Status ist ein Arbeitsstand der Verwaltung. */
+  ocrStatus?: "open" | "done" | "failed";
+  /**
+   * unassigned = ohne Kostenposition, Einzahlung und TOP. Nur mit Blick auf alle TOPs wirksam –
+   * was einer einzelnen TOP gezeigt wird, hängt ja gerade an der Zuordnung.
+   */
+  assignment?: "assigned" | "unassigned";
+  /** Belegdatum – ersatzweise der Tag des Uploads –, Grenzen einschließlich. */
+  from?: string;
+  to?: string;
+  /** Bruttobetrag in Cent, verglichen ohne Vorzeichen. */
+  minCents?: number;
+  maxCents?: number;
   sort?: DocumentSort;
   limit?: number;
   /** Genau ein Dokument – für getDocument. */
@@ -296,6 +328,37 @@ export async function listDocuments(
     );
   }
 
+  // Hat ein Dokument kein Belegdatum, zählt für den Zeitraum der Tag des Uploads.
+  const day = sql`coalesce(${documents.documentDate}, (${documents.createdAt} AT TIME ZONE 'Europe/Vienna')::date)`;
+  const amount = sql`abs(${documents.amountCents})`;
+  const anyLink = () =>
+    db
+      .select({ one: sql`1` })
+      .from(documentLinks)
+      .where(eq(documentLinks.documentId, documents.id));
+  const filters = and(
+    filter.categoryId === undefined
+      ? undefined
+      : filter.categoryId === "open"
+        ? and(isNull(documents.categoryId), inArray(documents.type, RECEIPT_TYPES))
+        : eq(documents.categoryId, filter.categoryId),
+    filter.reviewStatus ? eq(documents.reviewStatus, filter.reviewStatus) : undefined,
+    filter.ocrStatus && can(actor, "document:ocr")
+      ? filter.ocrStatus === "open"
+        ? inArray(documents.ocrStatus, ["none", "pending"])
+        : eq(documents.ocrStatus, filter.ocrStatus)
+      : undefined,
+    filter.assignment && scope.allUnits
+      ? filter.assignment === "unassigned"
+        ? and(isNull(documents.unitId), notExists(anyLink()))
+        : or(isNotNull(documents.unitId), exists(anyLink()))
+      : undefined,
+    filter.from ? sql`${day} >= ${filter.from}::date` : undefined,
+    filter.to ? sql`${day} <= ${filter.to}::date` : undefined,
+    filter.minCents !== undefined ? sql`${amount} >= ${filter.minCents}` : undefined,
+    filter.maxCents !== undefined ? sql`${amount} <= ${filter.maxCents}` : undefined,
+  );
+
   const order =
     filter.sort === "oldest"
       ? [asc(documents.createdAt), asc(documents.id)]
@@ -323,6 +386,7 @@ export async function listDocuments(
         filter.type ? eq(documents.type, filter.type) : undefined,
         filter.unitId && scope.allUnits ? relevantToUnit(filter.unitId) : undefined,
         searchCondition,
+        filters,
       ),
     )
     .orderBy(...order)

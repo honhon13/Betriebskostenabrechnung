@@ -36,8 +36,11 @@ import { NavSelect, YearSelect } from "@/components/layout/year-select";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { rowLinkClass } from "@/components/ui/interactive";
+import { MaybeLink } from "@/components/ui/maybe-link";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import { monthRange, withParams } from "@/lib/filters";
 import {
   creditCountLabel,
   formatCents,
@@ -47,8 +50,10 @@ import {
   formatPercent,
 } from "@/lib/format";
 import { DOCUMENT_TYPE_LABELS } from "@/lib/labels";
+import { cn } from "@/lib/utils";
 import { getAccountOverview } from "@/services/account.service";
 import { getDashboard, type Activity } from "@/services/dashboard.service";
+import { listUnits } from "@/services/masterdata.service";
 import { getCostTrend } from "@/services/overview.service";
 import { listPeriods, pickDefaultPeriod } from "@/services/periods.service";
 import { countOwnOpenSubmissions, countPendingReviews } from "@/services/review.service";
@@ -115,21 +120,60 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
     verlauf === TREND_ALL ? null : (periods.find((p) => String(p.year) === verlauf) ?? period);
 
   const reviews = can(user, "review:manage");
-  const [data, trend, pendingReviews, ownOpen, account] = await Promise.all([
+  const [data, trend, pendingReviews, ownOpen, account, units] = await Promise.all([
     getDashboard(user, period.id),
     can(user, "cost:read") ? getCostTrend(user, trendPeriod) : null,
     reviews ? countPendingReviews(user) : 0,
     reviews ? null : countOwnOpenSubmissions(user),
     can(user, "account:read") ? getAccountOverview(user) : null,
+    listUnits(user),
   ]);
   // Die jüngsten Bewegungen über alle sichtbaren Konten – neueste zuerst.
   const recentMovements = (account?.units ?? [])
-    .flatMap((unit) => unit.movements.map((movement) => ({ ...movement, unitName: unit.unitName })))
+    .flatMap((unit) =>
+      unit.movements.map((movement) => ({
+        ...movement,
+        unitId: unit.unitId,
+        unitName: unit.unitName,
+      })),
+    )
     .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id)
     .slice(0, 5);
   const own = !scope.allUnits;
   const year = period.year;
   const { openItems } = data;
+
+  // Ziele der Verlinkungen. Jede Kennzahl führt zu der Ansicht, aus der sie stammt – mit dem
+  // gewählten Jahr und, wo es eine gibt, der TOP als Filter. Verlinkt wird nur, was die Rolle
+  // öffnen darf: die Kostenliste etwa sieht nur die Verwaltung, alle anderen ihre Abrechnung.
+  const unitNumber = new Map(units.map((unit) => [unit.id, unit.number]));
+  const canCosts = can(user, "cost:read");
+  const canPayments = can(user, "payment:read");
+  const canDocuments = can(user, "document:read");
+  const statementHref = canCosts ? `/abrechnung/${year}` : undefined;
+  const costsPath = `/abrechnung/${year}/kosten`;
+  /** Kostenliste mit Filtern – für alle ohne Blick auf alle TOPs die eigene Abrechnung. */
+  const costsHref = (filters: Record<string, string | number | undefined> = {}) =>
+    !canCosts ? undefined : own ? statementHref : withParams(costsPath, filters);
+  const paymentsHref = (filters: Record<string, string | number | undefined> = {}) =>
+    canPayments ? withParams("/einzahlungen", { jahr: year, ...filters }) : undefined;
+  const documentsHref = (filters: Record<string, string | number | undefined> = {}) =>
+    canDocuments ? withParams("/dokumente", { jahr: year, ...filters }) : undefined;
+  /** Abrechnung einer TOP: aufgeklappt und als Sprungziel. */
+  const unitStatementHref = (unitId: number) =>
+    !canCosts
+      ? undefined
+      : own
+        ? statementHref
+        : withParams(`/abrechnung/${year}#top-${unitNumber.get(unitId)}`, {
+            top: unitNumber.get(unitId),
+          });
+  const accountHref = (unitId: number) =>
+    own
+      ? "/einzahlungen/konto"
+      : withParams(`/einzahlungen/konto#konto-top-${unitNumber.get(unitId)}`, {
+          top: unitNumber.get(unitId),
+        });
 
   // Offene Positionen: nur Zeilen, bei denen wirklich etwas zu tun ist.
   const openRows: OpenRow[] = [
@@ -149,7 +193,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             icon: Hourglass,
             label: `Eigene ${ownOpen.pending === 1 ? "Eingabe wartet" : "Eingaben warten"} auf Prüfung`,
             value: String(ownOpen.pending),
-            href: "/eingaben",
+            href: "/eingaben?pruefung=ausstehend",
           },
         ]
       : []),
@@ -159,7 +203,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             icon: CircleX,
             label: `Eigene ${ownOpen.rejected === 1 ? "Eingabe wurde" : "Eingaben wurden"} abgelehnt`,
             value: String(ownOpen.rejected),
-            href: "/eingaben",
+            href: "/eingaben?pruefung=abgelehnt",
           },
         ]
       : []),
@@ -167,7 +211,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
       icon: TriangleAlert,
       label: own ? "Nachzahlung offen" : `Nachzahlung ${balance.unitName}`,
       value: formatCents(Math.abs(balance.balanceCents)),
-      href: `/abrechnung/${year}`,
+      href: unitStatementHref(balance.unitId) ?? `/abrechnung/${year}`,
     })),
     ...(openItems.pendingPayments.count > 0
       ? [
@@ -195,7 +239,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             icon: ReceiptText,
             label: `${openItems.costsWithoutDocument === 1 ? "Kostenposition" : "Kostenpositionen"} ohne Beleg`,
             value: String(openItems.costsWithoutDocument),
-            href: `/abrechnung/${year}/kosten`,
+            // Gezählt sind freigegebene Positionen – dieselbe Auswahl zeigt die Liste.
+            href: withParams(costsPath, { beleg: "ohne", pruefung: "freigegeben" }),
           },
         ]
       : []),
@@ -205,7 +250,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             icon: FileQuestion,
             label: `${openItems.unassignedDocuments === 1 ? "Dokument" : "Dokumente"} ohne Zuordnung`,
             value: String(openItems.unassignedDocuments),
-            href: `/dokumente?jahr=${year}`,
+            href: withParams("/dokumente", { jahr: year, zuordnung: "ohne", pruefung: "freigegeben" }),
           },
         ]
       : []),
@@ -217,8 +262,17 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         ? `/abrechnung/${year}?position=${activity.id}`
         : `/abrechnung/${year}/kosten?position=${activity.id}`
       : activity.kind === "payment"
-        ? `/einzahlungen?jahr=${year}`
-        : `/dokumente?jahr=${year}`;
+        ? withParams("/einzahlungen", { jahr: year, zahlung: activity.id })
+        : withParams("/dokumente", { jahr: year, q: activity.title });
+
+  /** Kosten eines Zeitabschnitts im Kostenverlauf: ein Monat bzw. ein ganzes Abrechnungsjahr. */
+  const trendHref = (point: { year: number; month: number | null }) => {
+    if (!trendPeriod) return `/abrechnung/${point.year}`;
+    if (point.month === null) return undefined;
+    if (own) return `/abrechnung/${point.year}/monate`;
+    const { from, to } = monthRange(point.year, point.month);
+    return withParams(`/abrechnung/${point.year}/kosten`, { von: from, bis: to });
+  };
 
   const cell = "px-2 py-2.5 text-right tabular-nums whitespace-nowrap";
 
@@ -249,10 +303,22 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
               <PeriodStatusBadge status={period.status} />
             </p>
             <p className="text-sm text-muted">
-              {formatDate(period.startDate)} – {formatDate(period.endDate)} · {data.costCount}{" "}
-              {data.costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
-              {data.creditCount > 0 ? ` · ${creditCountLabel(data.creditCount)}` : ""} ·{" "}
-              {data.documentCount} {data.documentCount === 1 ? "Dokument" : "Dokumente"}
+              {formatDate(period.startDate)} – {formatDate(period.endDate)} ·{" "}
+              <MaybeLink href={costsHref({ art: "kosten" })}>
+                {data.costCount} {data.costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
+              </MaybeLink>
+              {data.creditCount > 0 ? (
+                <>
+                  {" · "}
+                  <MaybeLink href={costsHref({ art: "gutschriften" })}>
+                    {creditCountLabel(data.creditCount)}
+                  </MaybeLink>
+                </>
+              ) : null}
+              {" · "}
+              <MaybeLink href={documentsHref()}>
+                {data.documentCount} {data.documentCount === 1 ? "Dokument" : "Dokumente"}
+              </MaybeLink>
             </p>
           </div>
         </div>
@@ -268,6 +334,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           label={own ? "Kosten (mein Anteil)" : "Kosten"}
           value={formatCents(data.costBeforeCreditsCents)}
           icon={ReceiptText}
+          href={costsHref({ art: "kosten" })}
+          hrefLabel={own ? "Abrechnung anzeigen" : "Kostenpositionen anzeigen"}
         >
           {data.costCount} {data.costCount === 1 ? "Kostenposition" : "Kostenpositionen"}
         </StatTile>
@@ -275,6 +343,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           label={own ? "Gutschriften (mein Anteil)" : "Gutschriften"}
           value={formatCredit(data.creditCents)}
           icon={FileMinus}
+          href={costsHref({ art: "gutschriften" })}
+          hrefLabel={own ? "Abrechnung anzeigen" : "Gutschriften anzeigen"}
         >
           {data.creditCount === 0
             ? "Keine Gutschriften"
@@ -284,6 +354,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           label={own ? "Mein Kostenanteil" : "Nettokosten"}
           value={formatCents(data.costCents)}
           icon={Sigma}
+          href={statementHref}
+          hrefLabel="Abrechnung anzeigen"
         >
           Kosten abzüglich Gutschriften
         </StatTile>
@@ -291,6 +363,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           label={own ? "Meine Einzahlungen" : "Einzahlungen gesamt"}
           value={formatCents(data.paymentCents)}
           icon={Wallet}
+          href={paymentsHref()}
+          hrefLabel="Einzahlungen anzeigen"
         >
           {data.costCents > 0
             ? `decken ${formatPercent(Math.max(data.paymentCents, 0) / data.costCents)} der ${own ? "Kosten" : "Nettokosten"}`
@@ -300,10 +374,18 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           label={balanceLabel(data.balanceCents)}
           value={formatCents(Math.abs(data.balanceCents))}
           icon={Scale}
+          href={statementHref}
+          hrefLabel="Abrechnung je TOP anzeigen"
         >
           <BalanceBadge cents={data.balanceCents} />
         </StatTile>
-        <StatTile label="Belege & Dokumente" value={String(data.documentCount)} icon={Files}>
+        <StatTile
+          label="Belege & Dokumente"
+          value={String(data.documentCount)}
+          icon={Files}
+          href={documentsHref()}
+          hrefLabel="Dokumente anzeigen"
+        >
           {own
             ? `im Abrechnungsjahr ${year}`
             : openItems.costsWithoutDocument === 0
@@ -326,22 +408,33 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                 : ` Summe ${formatCents(trend.totalCents)}.`)
             }
             action={
-              <NavSelect
-                label="Zeitraum des Kostenverlaufs"
-                value={trendPeriod ? String(trendPeriod.year) : TREND_ALL}
-                options={[
-                  ...periods.map((p) => ({ value: String(p.year), label: `Monate ${p.year}` })),
-                  { value: TREND_ALL, label: "Alle Jahre" },
-                ]}
-                hrefPattern={`/dashboard?jahr=${year}&verlauf={value}`}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                {trendPeriod && can(user, "payment:read") ? (
+                  <ButtonLink href={`/abrechnung/${trendPeriod.year}/monate`} variant="ghost" size="sm">
+                    Monatsübersicht
+                  </ButtonLink>
+                ) : null}
+                <NavSelect
+                  label="Zeitraum des Kostenverlaufs"
+                  value={trendPeriod ? String(trendPeriod.year) : TREND_ALL}
+                  options={[
+                    ...periods.map((p) => ({ value: String(p.year), label: `Monate ${p.year}` })),
+                    { value: TREND_ALL, label: "Alle Jahre" },
+                  ]}
+                  hrefPattern={`/dashboard?jahr=${year}&verlauf={value}`}
+                />
+              </div>
             }
           />
           <CardContent>
             {trend.costCents === 0 && trend.creditCents === 0 ? (
               <p className="text-sm text-muted">Für diesen Zeitraum sind noch keine Kosten erfasst.</p>
             ) : (
-              <CostTrendChart trend={trend} singleLabel={own ? "Mein Kostenanteil" : "Kosten gesamt"} />
+              <CostTrendChart
+                trend={trend}
+                singleLabel={own ? "Mein Kostenanteil" : "Kosten gesamt"}
+                pointHref={trendHref}
+              />
             )}
           </CardContent>
         </Card>
@@ -359,7 +452,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
               </ButtonLink>
             }
           />
-          <AccountSummaryTable account={account} />
+          <AccountSummaryTable account={account} unitHref={(unit) => accountHref(unit.unitId)} />
           <div className="border-t border-border px-4 py-3 sm:px-5">
             <h3 className="text-sm font-semibold">Aktuelle Bewegungen</h3>
             {recentMovements.length === 0 ? (
@@ -369,15 +462,18 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             ) : (
               <ul className="mt-1 divide-y divide-border text-sm">
                 {recentMovements.map((movement) => (
-                  <li key={movement.id} className="flex flex-wrap items-center gap-x-4 gap-y-0.5 py-2">
-                    <span className="w-20 shrink-0 tabular-nums">{formatDate(movement.date)}</span>
-                    <span className="min-w-0 flex-1 truncate">
-                      {own ? "" : `${movement.unitName} · `}
-                      {movement.purpose ?? (movement.amountCents < 0 ? "Auszahlung" : "Einzahlung")}
-                    </span>
-                    <span className="ml-auto font-medium tabular-nums">
-                      {formatCents(movement.amountCents)}
-                    </span>
+                  <li key={movement.id}>
+                    {/* Führt zum Kontoauszug der TOP, in dem die Bewegung steht. */}
+                    <Link href={accountHref(movement.unitId)} className={cn(rowLinkClass, "flex-wrap gap-x-4 gap-y-0.5 py-2")}>
+                      <span className="w-20 shrink-0 tabular-nums">{formatDate(movement.date)}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        {own ? "" : `${movement.unitName} · `}
+                        {movement.purpose ?? (movement.amountCents < 0 ? "Auszahlung" : "Einzahlung")}
+                      </span>
+                      <span className="ml-auto font-medium tabular-nums">
+                        {formatCents(movement.amountCents)}
+                      </span>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -437,12 +533,31 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                 </thead>
                 <tbody className="divide-y divide-border">
                   {data.balances.map((balance) => (
-                    <tr key={balance.unitId}>
+                    <tr key={balance.unitId} className="hover:bg-surface-muted/50">
                       <th scope="row" className="px-2 py-2.5 text-left font-medium whitespace-nowrap">
-                        {balance.unitName}
+                        <MaybeLink
+                          href={unitStatementHref(balance.unitId)}
+                          title={`Abrechnung ${balance.unitName} anzeigen`}
+                        >
+                          {balance.unitName}
+                        </MaybeLink>
                       </th>
-                      <td className={cell}>{formatCents(balance.costCents)}</td>
-                      <td className={cell}>{formatCents(balance.paymentCents)}</td>
+                      <td className={cell}>
+                        <MaybeLink
+                          href={own ? undefined : costsHref({ top: unitNumber.get(balance.unitId) })}
+                          title={`Kostenpositionen ${balance.unitName} anzeigen`}
+                        >
+                          {formatCents(balance.costCents)}
+                        </MaybeLink>
+                      </td>
+                      <td className={cell}>
+                        <MaybeLink
+                          href={paymentsHref(own ? {} : { top: unitNumber.get(balance.unitId) })}
+                          title={`Einzahlungen ${balance.unitName} anzeigen`}
+                        >
+                          {formatCents(balance.paymentCents)}
+                        </MaybeLink>
+                      </td>
                       <td className={cell}>
                         <span className="font-semibold">
                           {formatCents(Math.abs(balance.balanceCents))}
@@ -460,8 +575,12 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                       <th scope="row" className="px-2 py-2.5 text-left">
                         Gesamt
                       </th>
-                      <td className={cell}>{formatCents(data.costCents)}</td>
-                      <td className={cell}>{formatCents(data.paymentCents)}</td>
+                      <td className={cell}>
+                        <MaybeLink href={statementHref}>{formatCents(data.costCents)}</MaybeLink>
+                      </td>
+                      <td className={cell}>
+                        <MaybeLink href={paymentsHref()}>{formatCents(data.paymentCents)}</MaybeLink>
+                      </td>
                       <td className={cell}>{formatCents(Math.abs(data.balanceCents))}</td>
                     </tr>
                   </tfoot>
@@ -478,12 +597,25 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
               (own ? "Dein Anteil je Kostenart." : "Summe je Kostenart über alle TOPs.") +
               (data.creditCount > 0 ? " Gutschriften stehen getrennt darunter." : "")
             }
+            action={
+              costsHref() ? (
+                <ButtonLink href={costsHref()!} variant="ghost" size="sm">
+                  {own ? "Zur Abrechnung" : "Alle Kosten"}
+                </ButtonLink>
+              ) : null
+            }
           />
           <CardContent>
             {data.categories.length === 0 ? (
               <p className="text-sm text-muted">Für {year} sind noch keine Kosten erfasst.</p>
             ) : (
-              <CategoryBars categories={data.categories} />
+              <CategoryBars
+                categories={data.categories}
+                href={(category) => costsHref({ kostenart: category.categoryId, art: "kosten" })}
+                creditHref={(category) =>
+                  costsHref({ kostenart: category.categoryId, art: "gutschriften" })
+                }
+              />
             )}
           </CardContent>
         </Card>
@@ -505,10 +637,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
               <ul className="divide-y divide-border">
                 {openRows.map((row) => (
                   <li key={row.label}>
-                    <Link
-                      href={row.href}
-                      className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2.5 text-sm hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-ring"
-                    >
+                    <Link href={row.href} className={rowLinkClass}>
                       <row.icon className="size-4 shrink-0 text-warning" aria-hidden />
                       <span className="min-w-0 flex-1">{row.label}</span>
                       <span className="shrink-0 font-semibold tabular-nums">{row.value}</span>
@@ -540,14 +669,36 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                     <div className="min-w-0 flex-1">
                       <DocumentPreviewButton document={document} variant="link" />
                       <p className="truncate text-xs text-muted">
-                        {document.costs[0]?.label ??
-                          document.payments[0]?.label ??
-                          document.description ??
-                          "Noch nicht zugeordnet"}{" "}
+                        {/* Die Zuordnung führt zur Kostenposition bzw. Einzahlung. */}
+                        <MaybeLink
+                          href={
+                            document.costs[0]
+                              ? own
+                                ? `/abrechnung/${document.year}?position=${document.costs[0].id}`
+                                : `/abrechnung/${document.year}/kosten?position=${document.costs[0].id}`
+                              : document.payments[0]
+                                ? withParams("/einzahlungen", {
+                                    jahr: document.year,
+                                    zahlung: document.payments[0].id,
+                                  })
+                                : undefined
+                          }
+                        >
+                          {document.costs[0]?.label ??
+                            document.payments[0]?.label ??
+                            document.description ??
+                            "Noch nicht zugeordnet"}
+                        </MaybeLink>{" "}
                         · {formatDate(document.createdAt)}
                       </p>
                     </div>
-                    <Badge tone="primary">{DOCUMENT_TYPE_LABELS[document.type]}</Badge>
+                    <Link
+                      href={withParams("/dokumente", { jahr: year, typ: document.type })}
+                      title={`Alle Dokumente vom Typ ${DOCUMENT_TYPE_LABELS[document.type]} anzeigen`}
+                      className="shrink-0 rounded-full transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    >
+                      <Badge tone="primary">{DOCUMENT_TYPE_LABELS[document.type]}</Badge>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -567,10 +718,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                 const Icon = ACTIVITY_ICON[activity.kind];
                 return (
                   <li key={`${activity.kind}-${activity.id}`}>
-                    <Link
-                      href={activityHref(activity)}
-                      className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2.5 text-sm hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-ring"
-                    >
+                    <Link href={activityHref(activity)} className={rowLinkClass}>
                       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-surface-muted text-muted">
                         <Icon className="size-4" aria-hidden />
                       </span>

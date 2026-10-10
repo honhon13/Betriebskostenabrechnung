@@ -6,6 +6,10 @@ export interface TrendPoint {
   label: string;
   /** Ausgeschriebener Zeitraum für Tooltip und Tabelle, z. B. „März 2025“. */
   title: string;
+  /** Abrechnungsjahr des Zeitabschnitts. */
+  year: number;
+  /** Monat 1–12; null = ganzes Jahr bzw. die Spalte „ohne Datum“. */
+  month: number | null;
   /** Kostenanteil je TOP – ohne Gutschriften –, in derselben Reihenfolge wie `units` des Verlaufs. */
   shares: number[];
   /** Kosten, die mangels Schlüsselwerten noch keiner TOP zugeordnet sind. */
@@ -48,9 +52,17 @@ const MONTHS_LONG = [
   "Dezember",
 ];
 
-const emptyPoint = (label: string, title: string, units: CostTrend["units"]): OpenPoint => ({
+const emptyPoint = (
+  label: string,
+  title: string,
+  units: CostTrend["units"],
+  year: number,
+  month: number | null = null,
+): OpenPoint => ({
   label,
   title,
+  year,
+  month,
   shares: units.map(() => 0),
   undistributedCents: 0,
   creditCents: 0,
@@ -102,8 +114,8 @@ export function buildMonthlyTrend(year: number, statement: Statement): CostTrend
   // Index 0–11 = Monate, 12 = ohne Datum.
   const points = Array.from({ length: 13 }, (_, index) =>
     index < 12
-      ? emptyPoint(MONTHS[index], `${MONTHS_LONG[index]} ${year}`, units)
-      : emptyPoint("o. D.", "Ohne Datum / außerhalb des Jahres", units),
+      ? emptyPoint(MONTHS[index], `${MONTHS_LONG[index]} ${year}`, units, year, index + 1)
+      : emptyPoint("o. D.", "Ohne Datum / außerhalb des Jahres", units, year),
   );
 
   for (const line of statement.lines) {
@@ -130,7 +142,7 @@ export function buildYearlyTrend(years: { year: number; statement: Statement }[]
   const points = [...years]
     .sort((a, b) => a.year - b.year)
     .map(({ year, statement }) => {
-      const point = emptyPoint(String(year), `Abrechnungsjahr ${year}`, unitList);
+      const point = emptyPoint(String(year), `Abrechnungsjahr ${year}`, unitList, year);
       for (const line of statement.lines) addLine(point, unitList, line);
       return point;
     });

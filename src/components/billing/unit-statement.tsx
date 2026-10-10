@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { DocumentChips } from "@/components/documents/document-preview";
 import { CoverageMeter } from "@/components/dashboard/coverage-meter";
+import { inlineLinkClass } from "@/components/ui/interactive";
 import { formatCents, formatCredit, formatDate, formatNumber } from "@/lib/format";
 import { PAYMENT_STATUS_LABELS } from "@/lib/labels";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,12 @@ interface UnitStatementProps {
   payments: PaymentDto[];
   /** Link zu allen Dokumenten der TOP – nur für die Verwaltung sinnvoll. */
   documentsHref?: string;
+  /** Link zu den Einzahlungen der TOP in diesem Jahr. */
+  paymentsHref?: string;
+  /** Link zu den Kostenpositionen mit Beteiligung der TOP – nur für die Verwaltung. */
+  costsHref?: string;
+  /** Sprungziel, z. B. `top-1`. */
+  id?: string;
   defaultOpen?: boolean;
   /** Hebt eine Kostenposition hervor (Sprungziel aus der Dokumentenverwaltung). */
   highlightCostId?: number;
@@ -37,6 +44,9 @@ export function UnitStatement({
   lines,
   payments,
   documentsHref,
+  paymentsHref,
+  costsHref,
+  id,
   defaultOpen = false,
   highlightCostId,
 }: UnitStatementProps) {
@@ -46,8 +56,9 @@ export function UnitStatement({
 
   return (
     <details
+      id={id}
       open={defaultOpen || undefined}
-      className="group rounded-xl border border-border bg-surface"
+      className="group scroll-mt-20 rounded-xl border border-border bg-surface"
     >
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3.5 focus-visible:outline-2 focus-visible:outline-ring sm:px-5 [&::-webkit-details-marker]:hidden">
         <span className="flex min-w-24 items-center gap-2 text-base font-semibold">
@@ -226,11 +237,23 @@ export function UnitStatement({
           )}
         </section>
 
-        {documentsHref ? (
-          <p className="text-sm">
-            <Link href={documentsHref} className="font-medium text-primary underline-offset-4 hover:underline">
-              Alle Dokumente {balance.unitName} im Jahr {year}
-            </Link>
+        {documentsHref || paymentsHref || costsHref ? (
+          <p className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+            {costsHref ? (
+              <Link href={costsHref} className={cn(inlineLinkClass, "font-medium text-primary")}>
+                Kostenpositionen {balance.unitName}
+              </Link>
+            ) : null}
+            {paymentsHref ? (
+              <Link href={paymentsHref} className={cn(inlineLinkClass, "font-medium text-primary")}>
+                Einzahlungen {balance.unitName} im Jahr {year}
+              </Link>
+            ) : null}
+            {documentsHref ? (
+              <Link href={documentsHref} className={cn(inlineLinkClass, "font-medium text-primary")}>
+                Alle Dokumente {balance.unitName} im Jahr {year}
+              </Link>
+            ) : null}
           </p>
         ) : null}
       </div>

@@ -6,6 +6,12 @@ import { can, getDataScope } from "@/auth/rbac";
 import { CostFields } from "@/components/billing/cost-fields";
 import { CreditBadge } from "@/components/billing/credit-badge";
 import { DocumentChips } from "@/components/documents/document-preview";
+import { FilterBar } from "@/components/filters/filter-bar";
+import {
+  FilterAmountRange,
+  FilterDateRange,
+  FilterSelect,
+} from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { FormDialog } from "@/components/forms/form-dialog";
 import { ReviewFlag } from "@/components/review/review-badge";
@@ -16,7 +22,20 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState } from "@/components/ui/page";
 import { isCredit } from "@/lib/billing/allocation";
+import {
+  COST_KIND_PARAMS,
+  RECEIPT_PARAMS,
+  REVIEW_STATUS_PARAMS,
+  countActive,
+  readAmount,
+  readDate,
+  readMapped,
+  readNumber,
+  readParam,
+} from "@/lib/filters";
 import { creditCountLabel, formatCents, formatCredit, formatDate } from "@/lib/format";
+import { REVIEW_STATUS_LABELS } from "@/lib/labels";
+import { filterCosts, type CostListFilter } from "@/lib/list-filters";
 import { listCosts } from "@/services/costs.service";
 import { isOcrAvailable } from "@/services/documents.service";
 import { listAllocationKeys, listCategories, listUnits } from "@/services/masterdata.service";
@@ -60,8 +79,27 @@ export default async function CostsPage({
     listUnits(user),
     listPeriods(user),
   ]);
+  const query = await searchParams;
   // ?position=12 – Sprungziel aus der Dokumentenverwaltung.
-  const highlighted = Number((await searchParams).position);
+  const highlighted = Number(query.position);
+  // Filter liegen in der URL und lassen sich beliebig kombinieren.
+  const filter: CostListFilter = {
+    search: readParam(query, "q"),
+    categoryId: categories.find((c) => c.id === readNumber(query, "kostenart"))?.id,
+    unitId: units.find((u) => String(u.number) === readParam(query, "top"))?.id,
+    kind: readMapped(query, "art", COST_KIND_PARAMS),
+    reviewStatus: readMapped(query, "pruefung", REVIEW_STATUS_PARAMS),
+    receipt: readMapped(query, "beleg", RECEIPT_PARAMS),
+    from: readDate(query, "von"),
+    to: readDate(query, "bis"),
+    minCents: readAmount(query, "betragAb"),
+    maxCents: readAmount(query, "betragBis"),
+  };
+  const activeFilters = countActive(Object.values(filter));
+  const shown = filterCosts(costs, filter);
+  const basePath = `/abrechnung/${period.year}/kosten`;
+  // Zur Auswahl stehen die Kostenarten, die in diesem Jahr vorkommen.
+  const usedCategories = categories.filter((c) => costs.some((cost) => cost.categoryId === c.id));
   // Kosten lassen sich nur in Jahren erfassen, die noch nicht freigegeben sind.
   const draftPeriods = periods
     .filter((p) => p.status === "draft")
@@ -74,8 +112,9 @@ export default async function CostsPage({
   const canDelete = draft && can(user, "cost:delete");
   const unitName = new Map(units.map((unit) => [unit.id, unit.name]));
   // Eingereichte, noch nicht freigegebene Positionen stehen in der Liste, zählen aber nicht mit.
-  const official = costs.filter((cost) => cost.reviewStatus === "approved");
-  const unreviewed = costs.length - official.length;
+  // Alle Summen beziehen sich auf die gefilterte Auswahl.
+  const official = shown.filter((cost) => cost.reviewStatus === "approved");
+  const unreviewed = shown.length - official.length;
   // Gutschriften (negative Beträge) sind eigene Positionen: sie zählen nicht als Kosten, sondern
   // stehen mit Anzahl und Betrag daneben und mindern die Nettokosten.
   const sum = (selected: CostDto[]) => selected.reduce((acc, cost) => acc + cost.amountCents, 0);
@@ -157,9 +196,67 @@ export default async function CostsPage({
             (credits.length > 0
               ? ` · ${creditCountLabel(credits.length)} · ${formatCredit(creditTotal)} · Nettokosten ${formatCents(total)}`
               : "") +
-            (unreviewed > 0 ? ` · ${unreviewed} eingereicht, nicht freigegeben` : "")
+            (unreviewed > 0 ? ` · ${unreviewed} eingereicht, nicht freigegeben` : "") +
+            (activeFilters > 0 ? ` – Auswahl aus ${costs.length}` : "")
           }
         />
+        {costs.length > 0 ? (
+          <FilterBar
+            action={basePath}
+            activeCount={activeFilters}
+            search={{
+              value: filter.search ?? "",
+              placeholder: "Beschreibung, Rechnungssteller, Rechnungsnummer …",
+            }}
+          >
+            <FilterSelect
+              name="kostenart"
+              label="Kostenart"
+              value={filter.categoryId}
+              allLabel="Alle Kostenarten"
+              options={usedCategories.map((c) => ({ value: c.id, label: c.name }))}
+            />
+            <FilterSelect
+              name="top"
+              label="TOP"
+              value={units.find((u) => u.id === filter.unitId)?.number}
+              allLabel="Alle TOPs"
+              options={units.map((u) => ({ value: u.number, label: u.name }))}
+            />
+            <FilterSelect
+              name="art"
+              label="Art"
+              value={filter.kind && COST_KIND_PARAMS[filter.kind]}
+              allLabel="Kosten und Gutschriften"
+              options={[
+                { value: COST_KIND_PARAMS.cost, label: "Nur Kosten" },
+                { value: COST_KIND_PARAMS.credit, label: "Nur Gutschriften" },
+              ]}
+            />
+            <FilterSelect
+              name="pruefung"
+              label="Prüfstand"
+              value={filter.reviewStatus && REVIEW_STATUS_PARAMS[filter.reviewStatus]}
+              allLabel="Jeder Prüfstand"
+              options={(["approved", "pending", "rejected"] as const).map((status) => ({
+                value: REVIEW_STATUS_PARAMS[status],
+                label: REVIEW_STATUS_LABELS[status],
+              }))}
+            />
+            <FilterSelect
+              name="beleg"
+              label="Beleg"
+              value={filter.receipt && RECEIPT_PARAMS[filter.receipt]}
+              allLabel="Mit und ohne Beleg"
+              options={[
+                { value: RECEIPT_PARAMS.with, label: "Mit Beleg" },
+                { value: RECEIPT_PARAMS.without, label: "Ohne Beleg" },
+              ]}
+            />
+            <FilterDateRange from={filter.from} to={filter.to} subject="Rechnungsdatum" />
+            <FilterAmountRange min={filter.minCents} max={filter.maxCents} />
+          </FilterBar>
+        ) : null}
         {costs.length === 0 ? (
           <EmptyState
             icon={ReceiptText}
@@ -170,11 +267,17 @@ export default async function CostsPage({
                 : "In diesem Abrechnungsjahr gibt es keine Kostenpositionen."
             }
           />
+        ) : shown.length === 0 ? (
+          <EmptyState
+            icon={ReceiptText}
+            title="Keine Treffer"
+            description="Für diese Suche bzw. Filter gibt es keine Kostenpositionen."
+          />
         ) : (
           <div className="pt-3">
             <DataTable
               caption={`Kostenpositionen ${period.year}`}
-              rows={costs}
+              rows={shown}
               columns={columns}
               rowKey={(cost) => cost.id}
               highlight={(cost) => cost.id === highlighted}

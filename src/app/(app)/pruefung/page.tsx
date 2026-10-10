@@ -10,6 +10,12 @@ import { requireUser } from "@/auth/current-user";
 import { can } from "@/auth/rbac";
 import { CreditBadge } from "@/components/billing/credit-badge";
 import { DocumentChips } from "@/components/documents/document-preview";
+import { FilterBar } from "@/components/filters/filter-bar";
+import {
+  FilterAmountRange,
+  FilterDateRange,
+  FilterSelect,
+} from "@/components/filters/filter-controls";
 import { ConfirmAction } from "@/components/forms/confirm-action";
 import { ReviewBadge } from "@/components/review/review-badge";
 import { ReviewDialog } from "@/components/review/review-dialog";
@@ -19,7 +25,17 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { NoAccess } from "@/components/ui/no-access";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import {
+  countActive,
+  readAmount,
+  readDate,
+  readMapped,
+  readNumber,
+  readParam,
+  withParams,
+} from "@/lib/filters";
 import { formatCents, formatDateTime } from "@/lib/format";
+import { filterReviewItems, type ReviewListFilter } from "@/lib/list-filters";
 import { cn } from "@/lib/utils";
 import {
   countPendingReviews,
@@ -36,6 +52,14 @@ const KIND_LABELS: Record<ReviewKind, string> = {
   cost: "Kosten",
   payment: "Einzahlung",
   document: "Dokument",
+};
+
+/** Art des Eintrags in der URL (?art=kosten). */
+const KIND_PARAMS: Record<ReviewKind, string> = {
+  period: "jahr",
+  cost: "kosten",
+  payment: "einzahlung",
+  document: "dokument",
 };
 
 /** Filter in der URL: /pruefung?status=abgelehnt */
@@ -63,12 +87,41 @@ export default async function ReviewPage({ searchParams }: PageProps<"/pruefung"
   const user = await requireUser();
   if (!can(user, "review:manage")) return <NoAccess />;
 
-  const { status: statusParam } = await searchParams;
-  const filter = FILTERS.find((f) => f.param === statusParam) ?? FILTERS[0];
-  const [items, pendingCount] = await Promise.all([
+  const query = await searchParams;
+  const filter = FILTERS.find((f) => f.param === query.status) ?? FILTERS[0];
+  const [allItems, pendingCount] = await Promise.all([
     listReviewItems(user, filter.status),
     countPendingReviews(user),
   ]);
+
+  // Der Prüfstand ist der Reiter; innerhalb davon lässt sich weiter eingrenzen.
+  const submitters = [...new Set(allItems.flatMap((item) => (item.submittedBy ? [item.submittedBy] : [])))].sort();
+  const years = [...new Set(allItems.map((item) => item.year))].sort((a, b) => b - a);
+  const listFilter: ReviewListFilter = {
+    search: readParam(query, "q"),
+    kind: readMapped(query, "art", KIND_PARAMS),
+    year: years.find((year) => year === readNumber(query, "jahr")),
+    submittedBy: submitters.find((name) => name === readParam(query, "benutzer")),
+    from: readDate(query, "von"),
+    to: readDate(query, "bis"),
+    minCents: readAmount(query, "betragAb"),
+    maxCents: readAmount(query, "betragBis"),
+  };
+  const activeFilters = countActive(Object.values(listFilter));
+  const items = filterReviewItems(allItems, listFilter);
+  // Beim Wechsel des Reiters bleiben die übrigen Filter erhalten.
+  const statusHref = (param: string) =>
+    withParams("/pruefung", {
+      status: param,
+      q: listFilter.search,
+      art: listFilter.kind && KIND_PARAMS[listFilter.kind],
+      jahr: listFilter.year,
+      benutzer: listFilter.submittedBy,
+      von: listFilter.from,
+      bis: listFilter.to,
+      betragAb: readParam(query, "betragAb"),
+      betragBis: readParam(query, "betragBis"),
+    });
 
   const deleteAction = (item: ReviewItem) =>
     item.kind === "cost" && can(user, "cost:delete")
@@ -158,7 +211,7 @@ export default async function ReviewPage({ searchParams }: PageProps<"/pruefung"
         {FILTERS.map((f) => (
           <Link
             key={f.param}
-            href={`/pruefung?status=${f.param}`}
+            href={statusHref(f.param)}
             aria-current={f === filter ? "page" : undefined}
             className={cn(
               "inline-flex h-9 items-center gap-2 rounded-full border px-3.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring",
@@ -179,7 +232,10 @@ export default async function ReviewPage({ searchParams }: PageProps<"/pruefung"
 
       <Card>
         <CardHeader
-          title={`${filter.label} – ${items.length} ${items.length === 1 ? "Eintrag" : "Einträge"}`}
+          title={
+            `${filter.label} – ${items.length} ${items.length === 1 ? "Eintrag" : "Einträge"}` +
+            (activeFilters > 0 ? ` von ${allItems.length}` : "")
+          }
           description={
             filter.status === "pending"
               ? "Älteste Einreichung zuerst. Belege lassen sich direkt in der Vorschau öffnen; mit einer Kostenposition oder Einzahlung werden ihre Belege mit freigegeben."
@@ -188,14 +244,58 @@ export default async function ReviewPage({ searchParams }: PageProps<"/pruefung"
                 : "Von dir geprüfte und freigegebene Einträge."
           }
         />
+        {allItems.length > 0 ? (
+          <FilterBar
+            action="/pruefung"
+            activeCount={activeFilters}
+            keep={{ status: filter.param }}
+            resetHref={withParams("/pruefung", { status: filter.param })}
+            search={{ value: listFilter.search ?? "", placeholder: "Eintrag, TOP, Einreicher …" }}
+          >
+            <FilterSelect
+              name="art"
+              label="Art"
+              value={listFilter.kind && KIND_PARAMS[listFilter.kind]}
+              allLabel="Alle Arten"
+              options={(Object.keys(KIND_PARAMS) as ReviewKind[]).map((kind) => ({
+                value: KIND_PARAMS[kind],
+                label: KIND_LABELS[kind],
+              }))}
+            />
+            <FilterSelect
+              name="jahr"
+              label="Abrechnungsjahr"
+              value={listFilter.year}
+              allLabel="Alle Jahre"
+              options={years.map((year) => ({ value: year, label: String(year) }))}
+            />
+            <FilterSelect
+              name="benutzer"
+              label="Eingereicht von"
+              value={listFilter.submittedBy}
+              allLabel="Alle Benutzer"
+              options={submitters.map((name) => ({ value: name, label: name }))}
+            />
+            <FilterDateRange from={listFilter.from} to={listFilter.to} subject="Eingereicht am" />
+            <FilterAmountRange min={listFilter.minCents} max={listFilter.maxCents} />
+          </FilterBar>
+        ) : null}
         {items.length === 0 ? (
           <EmptyState
             icon={ClipboardCheck}
-            title={filter.status === "pending" ? "Nichts zu prüfen" : "Keine Einträge"}
+            title={
+              activeFilters > 0
+                ? "Keine Treffer"
+                : filter.status === "pending"
+                  ? "Nichts zu prüfen"
+                  : "Keine Einträge"
+            }
             description={
-              filter.status === "pending"
-                ? "Es wartet kein eingereichter Eintrag auf deine Prüfung."
-                : "In diesem Stand gibt es keine Einträge."
+              activeFilters > 0
+                ? "Für diese Suche bzw. Filter gibt es in diesem Stand keine Einträge."
+                : filter.status === "pending"
+                  ? "Es wartet kein eingereichter Eintrag auf deine Prüfung."
+                  : "In diesem Stand gibt es keine Einträge."
             }
           />
         ) : (
